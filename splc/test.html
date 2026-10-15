@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPLC Test</title>
+<link rel="stylesheet" href="splc.css">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0b0e13; color: #c9d1d9; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  #wrap { display: grid; grid-template-rows: 1fr auto; height: 100%; }
+  #splc { min-height: 0; }
+  #log { max-height: 140px; overflow: auto; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a3140; color: #7d8590; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="splc"></div>
+  <div id="log">callbacks →</div>
+</div>
+<script src="seed.js"></script>
+<script src="splc.js"></script>
+<script>
+  var log = document.getElementById("log");
+  function say(s) { log.textContent += "\n" + s; log.scrollTop = log.scrollHeight; }
+  FD.splc.mount(document.getElementById("splc"), {
+    onEntity: function (e) { say("onEntity " + e.ticker + " (" + e.role + ", " + (e.exposurePct == null ? "n/a" : e.exposurePct + "%") + ")"); },
+    onPlot: function (list) { say("onPlot " + list.length + " entities: " + list.map(function (x) { return x.ticker + "@" + x.hq.lat + "," + x.hq.lon; }).join(" ")); }
+  });
+  var q = new URLSearchParams(location.search).get("t") || "WMT";
+  FD.splc.lookup(q).then(function (g) {
+    if (!g) return say("lookup failed");
+    say("graph " + g.root.ticker + ": " + g.suppliers.length + " suppliers, " + g.customers.length + " customers, " + g.peers.length + " peers, source=" + g.source);
+    window.__splcReady = true;
+  });
+</script>
+</body>
+</html>

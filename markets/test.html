@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlowDeck markets test</title>
+<link rel="stylesheet" href="markets.css">
+<style>
+  body { margin: 0; background: #0b0d10; color: #d7dde5; font-family: system-ui, sans-serif; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 16px; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font: 11px ui-monospace, monospace; color: #7d8794; }
+  .bar input { flex: 1; background: #11151a; color: #d7dde5; border: 1px solid #242b34; padding: 4px 6px; font: inherit; }
+  .bar button { background: transparent; color: #f5a623; border: 1px solid #242b34; padding: 4px 8px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <span>EIA key:</span>
+    <input id="eia" placeholder="optional — enables EIA daily spot for Brent/WTI">
+    <button id="save">save</button>
+    <button id="rf">refresh</button>
+  </div>
+  <div id="markets"></div>
+</div>
+<script src="markets.js"></script>
+<script>
+  FD.markets.mount(document.getElementById('markets'));
+  document.getElementById('eia').value = (FD.markets.getKeys().eia || '');
+  document.getElementById('save').onclick = function () { FD.markets.setKeys({ eia: document.getElementById('eia').value }); };
+  document.getElementById('rf').onclick = function () { FD.markets.refresh(); };
+  window.addEventListener('error', function (e) { console.error('PAGE ERROR', e.message); });
+</script>
+</body>
+</html>

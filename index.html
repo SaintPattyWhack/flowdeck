@@ -1,0 +1,3015 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d10">
+<title>FlowDeck</title>
+<meta name="description" content="FlowDeck — client-only commodity flow terminal: live AIS tanker map, choke-point counts, prices, news, watchlist and company supply-chain graphs.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0d10'/%3E%3Crect x='3' y='4' width='3' height='8' fill='%23f5a623'/%3E%3Crect x='7' y='7' width='3' height='5' fill='%23f5a623' opacity='.7'/%3E%3Crect x='11' y='2' width='3' height='10' fill='%23f5a623' opacity='.45'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+<style>
+
+/* ===== map/map.css ===== */
+/* FlowDeck — map module styles (FD.map)
+   Scope: everything lives under .fd-map (the container passed to mount()). */
+
+:root {
+  --fd-map-bg: #0b0e13;
+  --fd-map-panel: rgba(13, 17, 23, 0.88);
+  --fd-map-border: #2a3140;
+  --fd-map-text: #c9d1d9;
+  --fd-map-muted: #7d8590;
+  --fd-map-accent: #f5a623;
+  --fd-map-font: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* vessel colours (also read by map.js at runtime via getComputedStyle) */
+  --fd-v-tanker-laden: #f5a623;
+  --fd-v-tanker-ballast: #f5a623;
+  --fd-v-cargo: #6b7a8f;
+  --fd-v-gas: #2dd4bf;
+  --fd-v-other: #555555;
+  --fd-v-select: #ffffff;
+  --fd-choke: #f5a623;
+}
+
+.fd-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 240px;
+  background: var(--fd-map-bg);
+  font-family: var(--fd-map-font);
+  color: var(--fd-map-text);
+  overflow: hidden;
+  isolation: isolate;
+}
+.fd-map .leaflet-container {
+  background: var(--fd-map-bg);
+  font-family: var(--fd-map-font);
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+/* ---- Leaflet chrome overrides (dark) ---- */
+.fd-map .leaflet-control-zoom a {
+  background: var(--fd-map-panel);
+  color: var(--fd-map-text);
+  border-color: var(--fd-map-border);
+  width: 28px; height: 28px; line-height: 26px;
+  font-size: 15px;
+}
+.fd-map .leaflet-control-zoom a:hover { color: var(--fd-map-accent); background: #151b24; }
+.fd-map .leaflet-bar { border: 1px solid var(--fd-map-border); box-shadow: none; }
+.fd-map .leaflet-control-attribution {
+  background: rgba(11, 14, 19, 0.75);
+  color: var(--fd-map-muted);
+  font: 10px/1.4 var(--fd-map-font);
+  padding: 1px 5px;
+}
+.fd-map .leaflet-control-attribution a { color: #9aa4b2; }
+
+/* ---- tooltip ---- */
+.fd-map .fd-tip {
+  background: var(--fd-map-panel);
+  color: var(--fd-map-text);
+  border: 1px solid var(--fd-map-border);
+  border-radius: 2px;
+  padding: 5px 8px;
+  font: 11px/1.45 var(--fd-map-font);
+  box-shadow: 0 2px 10px rgba(0,0,0,.5);
+  white-space: nowrap;
+}
+.fd-map .fd-tip::before { display: none; }
+.fd-map .fd-tip .n { color: var(--fd-map-accent); font-weight: 700; letter-spacing: .02em; }
+.fd-map .fd-tip .m { color: var(--fd-map-muted); }
+.fd-map .fd-tip .l { color: var(--fd-v-tanker-laden); }
+.fd-map .fd-tip .b { color: var(--fd-map-muted); }
+
+/* ---- choke-point badge ---- */
+.fd-map .fd-choke-badge { background: none; border: 0; }
+.fd-map .fd-choke-badge > span {
+  display: inline-block;
+  transform: translate(-50%, -50%);
+  background: rgba(11, 14, 19, 0.85);
+  border: 1px solid var(--fd-choke);
+  color: var(--fd-choke);
+  font: 700 10px/1 var(--fd-map-font);
+  letter-spacing: .04em;
+  padding: 4px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.fd-map .fd-choke-badge > span .cnt { color: #fff; }
+
+/* ---- overlays (presets strip / legend) ---- */
+.fd-map .fd-map-ui {
+  position: absolute;
+  z-index: 800;                 /* above tiles/markers (400-600), below Leaflet popups (700+ / 1000 controls) */
+  pointer-events: none;
+  font: 11px/1.3 var(--fd-map-font);
+}
+.fd-map .fd-map-ui > * { pointer-events: auto; }
+
+.fd-map .fd-presets {
+  top: 8px; left: 8px; right: 8px;
+  display: flex; flex-wrap: wrap; gap: 4px;
+  max-width: calc(100% - 16px);
+}
+.fd-map .fd-presets button {
+  appearance: none;
+  background: var(--fd-map-panel);
+  border: 1px solid var(--fd-map-border);
+  color: var(--fd-map-text);
+  font: 700 10px/1 var(--fd-map-font);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 6px 7px;
+  min-height: 24px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color .12s, border-color .12s;
+}
+.fd-map .fd-presets button:hover { color: var(--fd-map-accent); border-color: var(--fd-map-accent); }
+.fd-map .fd-presets button.active {
+  color: #0b0e13; background: var(--fd-map-accent); border-color: var(--fd-map-accent);
+}
+.fd-map .fd-presets button:focus-visible { outline: 1px solid var(--fd-map-accent); outline-offset: 1px; }
+
+.fd-map .fd-legend {
+  right: 8px; bottom: 22px;
+  background: var(--fd-map-panel);
+  border: 1px solid var(--fd-map-border);
+  border-radius: 2px;
+  padding: 6px 8px;
+  display: grid; grid-template-columns: auto auto; gap: 3px 8px;
+  align-items: center;
+  color: var(--fd-map-muted);
+  font-size: 10px;
+  letter-spacing: .03em;
+}
+.fd-map .fd-legend .sw {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid currentColor; box-sizing: border-box;
+}
+.fd-map .fd-legend .sw.fill { background: currentColor; }
+.fd-map .fd-legend .c-tl { color: var(--fd-v-tanker-laden); }
+.fd-map .fd-legend .c-tb { color: var(--fd-v-tanker-ballast); }
+.fd-map .fd-legend .c-cg { color: var(--fd-v-cargo); }
+.fd-map .fd-legend .c-gs { color: var(--fd-v-gas); }
+.fd-map .fd-legend .c-ot { color: #8a8a8a; }
+.fd-map .fd-legend .c-ck { color: var(--fd-choke); }
+.fd-map .fd-legend .sw.poly { border-radius: 1px; background: rgba(245,166,35,.25); }
+.fd-map .fd-legend .lbl { color: var(--fd-map-text); }
+.fd-map .fd-legend .count {
+  grid-column: 1 / -1; margin-top: 2px; padding-top: 3px;
+  border-top: 1px solid var(--fd-map-border);
+  color: var(--fd-map-muted);
+}
+.fd-map .fd-legend .count b { color: var(--fd-map-accent); font-weight: 700; }
+
+/* Leaflet default zoom control sits top-left; move it below the presets strip */
+.fd-map .leaflet-top.leaflet-left { top: 40px; }
+
+/* ---- phone ---- */
+@media (max-width: 640px) {
+  .fd-map .fd-presets { gap: 3px; right: 8px; }
+  .fd-map .fd-presets button { padding: 7px 6px; font-size: 9px; min-height: 28px; }
+  .fd-map .fd-legend { font-size: 9px; padding: 5px 6px; gap: 2px 6px; bottom: 20px; }
+  .fd-map .leaflet-top.leaflet-left { top: 76px; }
+  .fd-map .leaflet-control-zoom a { width: 32px; height: 32px; line-height: 30px; }
+}
+
+/* ===== markets/markets.css ===== */
+/* FlowDeck — markets panel styles (Agent C). Pure CSS, dark terminal, phone-friendly. */
+:root {
+  --fd-bg: #0b0d10;
+  --fd-panel: #11151a;
+  --fd-panel-2: #171c23;
+  --fd-border: #242b34;
+  --fd-text: #d7dde5;
+  --fd-muted: #7d8794;
+  --fd-accent: #f5a623;
+  --fd-accent-dim: rgba(245, 166, 35, 0.18);
+  --fd-up: #2ecc71;
+  --fd-dn: #ff5c5c;
+  --fd-flat: #8c96a3;
+  --fd-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fd-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.fd-markets {
+  background: var(--fd-panel);
+  color: var(--fd-text);
+  font-family: var(--fd-sans);
+  font-size: 12px;
+  line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.fd-markets *, .fd-markets *::before, .fd-markets *::after { box-sizing: border-box; }
+
+/* section */
+.fd-sec { border: 1px solid var(--fd-border); background: var(--fd-panel-2); border-radius: 4px; overflow: hidden; }
+.fd-sec-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; border-bottom: 1px solid var(--fd-border);
+  background: linear-gradient(180deg, rgba(245,166,35,0.08), transparent);
+}
+.fd-sec-head h3 {
+  margin: 0; font: 700 11px/1 var(--fd-mono); letter-spacing: 0.14em; color: var(--fd-accent);
+}
+.fd-status { margin-left: auto; font: 10px/1 var(--fd-mono); color: var(--fd-muted); white-space: nowrap; }
+.fd-status.err { color: var(--fd-dn); }
+.fd-btn {
+  background: transparent; color: var(--fd-accent); border: 1px solid var(--fd-border); border-radius: 3px;
+  font: 700 11px/1 var(--fd-mono); padding: 4px 8px; cursor: pointer; letter-spacing: 0.08em;
+}
+.fd-btn:hover { background: var(--fd-accent-dim); border-color: var(--fd-accent); }
+.fd-btn:focus-visible { outline: 2px solid var(--fd-accent); outline-offset: 1px; }
+
+/* price grid */
+.fd-grid { font-family: var(--fd-mono); font-variant-numeric: tabular-nums; }
+.fd-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 1.6fr) minmax(62px, 1fr) minmax(58px, 1fr) minmax(62px, 1fr) 84px;
+  align-items: center; gap: 6px;
+  padding: 4px 10px; border-bottom: 1px solid rgba(36,43,52,0.6);
+}
+.fd-row:last-child { border-bottom: 0; }
+.fd-row:hover:not(.fd-head) { background: rgba(255,255,255,0.025); }
+.fd-row.fd-head { color: var(--fd-muted); font-size: 9.5px; letter-spacing: 0.1em; padding-top: 5px; padding-bottom: 5px; background: rgba(0,0,0,0.25); }
+.fd-row.na { opacity: 0.5; }
+.fd-group { padding: 5px 10px 2px; color: var(--fd-accent); font-size: 9.5px; letter-spacing: 0.14em; opacity: 0.85; }
+.fd-c-sym { display: flex; flex-direction: column; min-width: 0; }
+.fd-tick { font-weight: 700; color: var(--fd-text); }
+.fd-name { font-family: var(--fd-sans); font-size: 10px; color: var(--fd-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fd-c-num { text-align: right; white-space: nowrap; }
+.fd-last { color: var(--fd-text); font-weight: 600; }
+.fd-row.up .fd-chg, .fd-row.up .fd-pct { color: var(--fd-up); }
+.fd-row.dn .fd-chg, .fd-row.dn .fd-pct { color: var(--fd-dn); }
+.fd-row.flat .fd-chg, .fd-row.flat .fd-pct { color: var(--fd-flat); }
+.fd-c-spark { display: flex; justify-content: flex-end; }
+.fd-spark { width: 80px; height: 22px; display: block; }
+.fd-spark polyline { fill: none; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.fd-spark.up polyline, .fd-spark.up circle { stroke: var(--fd-up); fill: var(--fd-up); }
+.fd-spark.dn polyline, .fd-spark.dn circle { stroke: var(--fd-dn); fill: var(--fd-dn); }
+.fd-spark.flat polyline, .fd-spark.flat circle { stroke: var(--fd-flat); fill: var(--fd-flat); }
+.fd-spark.up polyline, .fd-spark.dn polyline, .fd-spark.flat polyline { fill: none; }
+.fd-spark-empty line { stroke: var(--fd-border); stroke-dasharray: 2 3; }
+
+/* watchlist */
+.fd-watch-form { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--fd-border); }
+.fd-input {
+  flex: 1; min-width: 0; background: var(--fd-bg); color: var(--fd-text); border: 1px solid var(--fd-border); border-radius: 3px;
+  font: 12px var(--fd-mono); padding: 5px 8px; text-transform: uppercase;
+}
+.fd-input:focus { outline: none; border-color: var(--fd-accent); box-shadow: 0 0 0 2px var(--fd-accent-dim); }
+.fd-input::placeholder { color: var(--fd-muted); text-transform: none; }
+.fd-grid[data-grid="watch"] .fd-row { grid-template-columns: minmax(96px, 1.6fr) minmax(62px, 1fr) minmax(58px, 1fr) minmax(62px, 1fr) 84px 22px; }
+.fd-rm {
+  background: transparent; border: 0; color: var(--fd-muted); font: 14px/1 var(--fd-mono); cursor: pointer; padding: 0; width: 22px; height: 22px; border-radius: 3px;
+}
+.fd-rm:hover { color: var(--fd-dn); background: rgba(255,92,92,0.12); }
+.fd-rm-ph { width: 22px; }
+
+/* news */
+.fd-news { max-height: 320px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--fd-border) transparent; }
+.fd-news-item {
+  display: block; padding: 6px 10px; text-decoration: none; color: var(--fd-text); border-bottom: 1px solid rgba(36,43,52,0.6);
+  border-left: 2px solid transparent;
+}
+.fd-news-item:hover { background: rgba(255,255,255,0.025); border-left-color: var(--fd-accent); }
+.fd-news-title { display: block; font-size: 12px; line-height: 1.3; }
+.fd-news-meta { display: flex; gap: 8px; margin-top: 2px; font: 10px var(--fd-mono); color: var(--fd-muted); }
+.fd-news-src { color: var(--fd-accent); letter-spacing: 0.06em; }
+.fd-empty { padding: 14px 10px; color: var(--fd-muted); font: 11px var(--fd-mono); text-align: center; }
+
+/* narrow widths */
+@media (max-width: 420px) {
+  .fd-row { grid-template-columns: minmax(70px, 1.4fr) minmax(56px, 1fr) minmax(56px, 1fr) 60px; }
+  .fd-grid[data-grid="watch"] .fd-row { grid-template-columns: minmax(70px, 1.4fr) minmax(56px, 1fr) minmax(56px, 1fr) 60px 22px; }
+  .fd-chg, .fd-row.fd-head .fd-c-num:nth-child(3) { display: none; }
+  .fd-spark { width: 60px; }
+  .fd-name { display: none; }
+}
+
+/* ===== splc/splc.css ===== */
+/* FlowDeck — SPLC module styles (FD.splc)
+   Scope: everything lives under .fd-splc (the container passed to mount()). */
+
+:root {
+  --fd-splc-bg: #0b0e13;
+  --fd-splc-panel: #10151d;
+  --fd-splc-panel2: #161c26;
+  --fd-splc-border: #2a3140;
+  --fd-splc-text: #c9d1d9;
+  --fd-splc-muted: #7d8590;
+  --fd-splc-accent: #f5a623;
+  --fd-splc-accent-dim: rgba(245, 166, 35, 0.18);
+  --fd-splc-supplier: #2dd4bf;
+  --fd-splc-customer: #f5a623;
+  --fd-splc-danger: #f0583a;
+  --fd-splc-font: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.fd-splc {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  padding: 10px;
+  box-sizing: border-box;
+  background: var(--fd-splc-bg);
+  color: var(--fd-splc-text);
+  font-family: var(--fd-splc-font);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: auto;
+}
+.fd-splc *, .fd-splc *::before, .fd-splc *::after { box-sizing: border-box; }
+.fd-splc a { color: var(--fd-splc-accent); text-decoration: none; }
+.fd-splc a:hover { text-decoration: underline; }
+.fd-splc button {
+  font: inherit;
+  color: var(--fd-splc-text);
+  background: var(--fd-splc-panel2);
+  border: 1px solid var(--fd-splc-border);
+  border-radius: 3px;
+  padding: 5px 10px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.fd-splc button:hover:not(:disabled) { border-color: var(--fd-splc-accent); color: var(--fd-splc-accent); }
+.fd-splc button:disabled { opacity: 0.4; cursor: default; }
+.fd-splc button.fd-splc-primary { background: var(--fd-splc-accent); color: #0b0e13; border-color: var(--fd-splc-accent); font-weight: 700; }
+.fd-splc button.fd-splc-primary:hover:not(:disabled) { background: #ffb63a; color: #0b0e13; }
+
+/* ---- search bar ---- */
+.fd-splc-bar { display: flex; gap: 6px; align-items: center; position: relative; flex-wrap: wrap; }
+.fd-splc-tag {
+  color: var(--fd-splc-accent);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 0 4px;
+}
+.fd-splc-search { position: relative; flex: 1 1 180px; min-width: 0; }
+.fd-splc-search input {
+  width: 100%;
+  font: inherit;
+  color: var(--fd-splc-text);
+  background: var(--fd-splc-panel);
+  border: 1px solid var(--fd-splc-border);
+  border-radius: 3px;
+  padding: 6px 8px;
+  text-transform: uppercase;
+  outline: none;
+}
+.fd-splc-search input:focus { border-color: var(--fd-splc-accent); }
+.fd-splc-search input::placeholder { color: var(--fd-splc-muted); text-transform: none; }
+.fd-splc-ac {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+  max-height: 220px; overflow-y: auto;
+  background: var(--fd-splc-panel); border: 1px solid var(--fd-splc-border); border-top: none;
+  display: none;
+}
+.fd-splc-ac.open { display: block; }
+.fd-splc-ac-item { display: flex; gap: 8px; padding: 5px 8px; cursor: pointer; }
+.fd-splc-ac-item .t { color: var(--fd-splc-accent); width: 56px; flex: none; }
+.fd-splc-ac-item .n { color: var(--fd-splc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-splc-ac-item .s { color: var(--fd-splc-muted); margin-left: auto; flex: none; font-size: 10px; }
+.fd-splc-ac-item:hover, .fd-splc-ac-item.active { background: var(--fd-splc-accent-dim); }
+.fd-splc-status { color: var(--fd-splc-muted); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; flex: 1 1 100%; }
+.fd-splc-status.err { color: var(--fd-splc-danger); }
+
+/* ---- root card ---- */
+.fd-splc-root {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  background: var(--fd-splc-panel); border: 1px solid var(--fd-splc-border); border-left: 3px solid var(--fd-splc-accent);
+  padding: 8px 10px;
+}
+.fd-splc-root .tk { font-size: 20px; font-weight: 700; color: var(--fd-splc-accent); letter-spacing: 0.04em; }
+.fd-splc-root .nm { font-size: 13px; }
+.fd-splc-root .meta { color: var(--fd-splc-muted); font-size: 10px; display: flex; gap: 12px; flex-wrap: wrap; }
+.fd-splc-root .meta b { color: var(--fd-splc-text); font-weight: 600; }
+.fd-splc-root .actions { margin-left: auto; display: flex; gap: 6px; }
+.fd-splc-peers { color: var(--fd-splc-muted); font-size: 10px; flex: 1 1 100%; }
+.fd-splc-peers a { margin-right: 8px; cursor: pointer; }
+
+/* ---- columns ---- */
+.fd-splc-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fd-splc-col { background: var(--fd-splc-panel); border: 1px solid var(--fd-splc-border); min-width: 0; }
+.fd-splc-col h3 {
+  margin: 0; padding: 6px 10px; font-size: 11px; letter-spacing: 0.14em; font-weight: 700;
+  border-bottom: 1px solid var(--fd-splc-border); display: flex; justify-content: space-between;
+}
+.fd-splc-col h3 .cnt { color: var(--fd-splc-muted); font-weight: 400; }
+.fd-splc-col.sup h3 { color: var(--fd-splc-supplier); }
+.fd-splc-col.cus h3 { color: var(--fd-splc-customer); }
+.fd-splc-empty { padding: 14px 10px; color: var(--fd-splc-muted); font-size: 11px; }
+.fd-splc-row {
+  display: grid; grid-template-columns: 54px 1fr 64px; gap: 8px; align-items: center;
+  padding: 6px 10px; border-bottom: 1px solid rgba(42, 49, 64, 0.5); cursor: pointer;
+}
+.fd-splc-row:hover { background: var(--fd-splc-accent-dim); }
+.fd-splc-row .tk { color: var(--fd-splc-accent); font-weight: 700; }
+.fd-splc-row .tk.nolink { color: var(--fd-splc-muted); font-weight: 400; }
+.fd-splc-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-splc-row .basis { color: var(--fd-splc-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-splc-row .pct { text-align: right; font-variant-numeric: tabular-nums; }
+.fd-splc-row .pct.na { color: var(--fd-splc-muted); }
+.fd-splc-bar-wrap { grid-column: 1 / -1; height: 3px; background: var(--fd-splc-panel2); }
+.fd-splc-bar-fill { height: 100%; background: var(--fd-splc-accent); }
+.sup .fd-splc-bar-fill { background: var(--fd-splc-supplier); }
+.fd-splc-ev { grid-column: 1 / -1; font-size: 10px; color: var(--fd-splc-muted); display: none; padding-top: 2px; }
+.fd-splc-row.open .fd-splc-ev { display: block; }
+.fd-splc-ev q { font-style: italic; color: var(--fd-splc-text); quotes: "\201C" "\201D"; }
+
+/* ---- mini graph ---- */
+.fd-splc-graph { background: var(--fd-splc-panel); border: 1px solid var(--fd-splc-border); }
+.fd-splc-graph svg { display: block; width: 100%; height: auto; max-height: 360px; }
+.fd-splc-graph .edge { stroke: var(--fd-splc-border); stroke-width: 1; fill: none; }
+.fd-splc-graph .edge.sup { stroke: var(--fd-splc-supplier); opacity: 0.55; }
+.fd-splc-graph .edge.cus { stroke: var(--fd-splc-customer); opacity: 0.55; }
+.fd-splc-graph .node { cursor: pointer; }
+.fd-splc-graph .node circle { fill: var(--fd-splc-panel2); stroke: var(--fd-splc-muted); stroke-width: 1; }
+.fd-splc-graph .node.sup circle { stroke: var(--fd-splc-supplier); }
+.fd-splc-graph .node.cus circle { stroke: var(--fd-splc-customer); }
+.fd-splc-graph .node.root circle { fill: var(--fd-splc-accent); stroke: var(--fd-splc-accent); }
+.fd-splc-graph .node:hover circle { stroke-width: 2; }
+.fd-splc-graph .node text { font-family: var(--fd-splc-font); font-size: 9px; fill: var(--fd-splc-text); }
+.fd-splc-graph .node.root text { fill: #0b0e13; font-weight: 700; font-size: 10px; }
+.fd-splc-graph .lbl { font-family: var(--fd-splc-font); font-size: 9px; fill: var(--fd-splc-muted); letter-spacing: 0.1em; }
+
+.fd-splc-foot { color: var(--fd-splc-muted); font-size: 10px; letter-spacing: 0.04em; }
+
+@media (max-width: 640px) {
+  .fd-splc { padding: 8px; }
+  .fd-splc-cols { grid-template-columns: 1fr; }
+  .fd-splc-root .actions { margin-left: 0; }
+  .fd-splc-row { grid-template-columns: 48px 1fr 56px; }
+}
+
+/* ===== shell/shell.css ===== */
+/* FlowDeck shell — layout, command bar, status strip, drawers, modals.
+   Loaded LAST so its :root tokens win over module defaults. */
+:root {
+  --fd-bg: #0b0d10;
+  --fd-panel: #11151a;
+  --fd-panel-2: #171c23;
+  --fd-border: #242b34;
+  --fd-text: #d7dde5;
+  --fd-muted: #7d8794;
+  --fd-accent: #f5a623;
+  --fd-accent-dim: rgba(245, 166, 35, 0.18);
+  --fd-up: #2ecc71;
+  --fd-dn: #ff5c5c;
+  --fd-warn: #f7c948;
+  --fd-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fd-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --fd-side-w: 360px;
+  --fd-top-h: 44px;
+  --fd-status-h: 26px;
+  color-scheme: dark;
+}
+
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--fd-bg);
+  color: var(--fd-text);
+  font-family: var(--fd-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+*, *::before, *::after { box-sizing: border-box; }
+button { font: inherit; }
+::selection { background: var(--fd-accent-dim); }
+
+#fd-app { display: flex; flex-direction: column; height: 100%; width: 100%; }
+
+/* ---------------------------------------------------------------- top bar */
+.fd-top {
+  display: flex; align-items: center; gap: 10px;
+  height: var(--fd-top-h); padding: 0 12px;
+  background: var(--fd-panel); border-bottom: 1px solid var(--fd-border);
+  flex: none;
+}
+.fd-wordmark {
+  font-family: var(--fd-mono); font-weight: 700; font-size: 15px; letter-spacing: 0.14em;
+  color: var(--fd-accent); white-space: nowrap; user-select: none;
+}
+.fd-wordmark::before { content: "▮ "; opacity: 0.8; }
+.fd-cmd { flex: 1 1 auto; display: flex; align-items: center; position: relative; min-width: 0; }
+.fd-cmd-prompt {
+  position: absolute; left: 10px; color: var(--fd-accent); font-family: var(--fd-mono); font-size: 13px; pointer-events: none;
+}
+.fd-cmd input {
+  width: 100%; height: 30px; padding: 0 70px 0 26px;
+  background: var(--fd-bg); color: var(--fd-text); border: 1px solid var(--fd-border); border-radius: 4px;
+  font-family: var(--fd-mono); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; outline: none;
+}
+.fd-cmd input::placeholder { text-transform: none; color: var(--fd-muted); letter-spacing: 0; }
+.fd-cmd input:focus { border-color: var(--fd-accent); box-shadow: 0 0 0 2px var(--fd-accent-dim); }
+.fd-cmd-hint {
+  position: absolute; right: 10px; font-family: var(--fd-mono); font-size: 11px; color: var(--fd-muted); pointer-events: none; white-space: nowrap;
+}
+.fd-cmd-hint.err { color: var(--fd-dn); }
+.fd-cmd-hint.ok { color: var(--fd-up); }
+.fd-top-btns { display: flex; gap: 6px; flex: none; }
+.fd-ibtn {
+  height: 28px; padding: 0 10px; border: 1px solid var(--fd-border); border-radius: 4px;
+  background: var(--fd-panel-2); color: var(--fd-text); font-family: var(--fd-mono); font-size: 11px; letter-spacing: 0.06em; cursor: pointer;
+}
+.fd-ibtn:hover { border-color: var(--fd-accent); color: var(--fd-accent); }
+
+/* ---------------------------------------------------------------- status strip */
+.fd-status-strip {
+  display: flex; align-items: center; gap: 14px; height: var(--fd-status-h); padding: 0 12px;
+  background: var(--fd-bg); border-bottom: 1px solid var(--fd-border);
+  font-family: var(--fd-mono); font-size: 11px; color: var(--fd-muted); flex: none;
+  overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: none;
+}
+.fd-status-strip::-webkit-scrollbar { display: none; }
+.fd-status-strip b { color: var(--fd-text); font-weight: 600; }
+.fd-status-strip .acc { color: var(--fd-accent); }
+.fd-st-item { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.fd-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fd-muted); display: inline-block; }
+.fd-dot[data-state="live"] { background: var(--fd-up); box-shadow: 0 0 6px var(--fd-up); }
+.fd-dot[data-state="demo"] { background: var(--fd-accent); }
+.fd-dot[data-state="connecting"] { background: var(--fd-warn); animation: fd-blink 1s infinite; }
+.fd-dot[data-state="error"] { background: var(--fd-dn); }
+.fd-dot[data-state="closed"] { background: var(--fd-muted); }
+@keyframes fd-blink { 50% { opacity: 0.25; } }
+.fd-st-spacer { flex: 1 1 auto; }
+
+/* ---------------------------------------------------------------- banner */
+.fd-banner {
+  display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+  background: var(--fd-accent-dim); color: var(--fd-text); border-bottom: 1px solid var(--fd-border);
+  font-size: 12px; flex: none;
+}
+.fd-banner b { color: var(--fd-accent); font-family: var(--fd-mono); }
+.fd-banner a { color: var(--fd-accent); cursor: pointer; text-decoration: underline; }
+.fd-banner .x { margin-left: auto; background: none; border: 0; color: var(--fd-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
+.fd-banner .x:hover { color: var(--fd-text); }
+.fd-banner[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- main layout */
+.fd-main { flex: 1 1 auto; display: flex; min-height: 0; position: relative; }
+.fd-mapwrap { flex: 1 1 auto; position: relative; min-width: 0; min-height: 0; display: flex; }
+#fd-map { flex: 1 1 auto; min-height: 0; }
+.fd-side {
+  width: var(--fd-side-w); flex: none; display: flex; flex-direction: column; min-height: 0;
+  background: var(--fd-panel); border-left: 1px solid var(--fd-border);
+}
+.fd-tabs { display: flex; flex: none; border-bottom: 1px solid var(--fd-border); background: var(--fd-bg); }
+.fd-tab {
+  flex: 1 1 0; height: 32px; border: 0; border-bottom: 2px solid transparent; background: transparent;
+  color: var(--fd-muted); font-family: var(--fd-mono); font-size: 11px; letter-spacing: 0.1em; cursor: pointer;
+}
+.fd-tab:hover { color: var(--fd-text); }
+.fd-tab[aria-selected="true"] { color: var(--fd-accent); border-bottom-color: var(--fd-accent); }
+.fd-panes { flex: 1 1 auto; min-height: 0; position: relative; }
+.fd-pane { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding: 10px; display: none; scrollbar-width: thin; scrollbar-color: var(--fd-border) transparent; }
+.fd-pane.active { display: block; }
+#fd-pane-splc { padding: 0; }
+#fd-pane-splc .fd-splc { min-height: 100%; height: auto; }
+/* the side panel is 360px wide: stack SPLC's two columns like its own phone layout */
+#fd-pane-splc .fd-splc-cols { grid-template-columns: 1fr; }
+#fd-pane-splc .fd-splc-root .actions { margin-left: 0; }
+#fd-pane-splc .fd-splc-row { grid-template-columns: 48px 1fr 56px; }
+
+/* choke table */
+.fd-choke-table { width: 100%; border-collapse: collapse; font-family: var(--fd-mono); font-size: 12px; }
+.fd-choke-table th { text-align: left; color: var(--fd-muted); font-weight: 500; font-size: 10px; letter-spacing: 0.08em; padding: 4px 6px; border-bottom: 1px solid var(--fd-border); }
+.fd-choke-table th.n, .fd-choke-table td.n { text-align: right; }
+.fd-choke-table td { padding: 6px; border-bottom: 1px solid var(--fd-border); }
+.fd-choke-table tr.row { cursor: pointer; }
+.fd-choke-table tr.row:hover td { background: var(--fd-panel-2); color: var(--fd-accent); }
+.fd-choke-table td.n b { color: var(--fd-accent); font-weight: 600; }
+.fd-choke-table .bar { height: 3px; background: var(--fd-accent); margin-top: 3px; border-radius: 1px; opacity: 0.8; }
+.fd-pane-note { color: var(--fd-muted); font-size: 11px; margin: 10px 0 0; line-height: 1.5; }
+
+/* ---------------------------------------------------------------- vessel drawer */
+.fd-drawer {
+  position: absolute; top: 10px; right: 10px; width: 300px; max-height: calc(100% - 20px); overflow-y: auto;
+  background: rgba(17, 21, 26, 0.96); border: 1px solid var(--fd-border); border-left: 3px solid var(--fd-accent); border-radius: 4px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5); z-index: 900; font-family: var(--fd-mono); font-size: 12px;
+  transform: translateX(16px); opacity: 0; pointer-events: none; transition: transform .15s ease, opacity .15s ease;
+}
+.fd-drawer.open { transform: none; opacity: 1; pointer-events: auto; }
+.fd-drawer-head { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px 6px; border-bottom: 1px solid var(--fd-border); }
+.fd-drawer-head h2 { margin: 0; font-size: 14px; font-weight: 700; color: var(--fd-accent); letter-spacing: 0.04em; flex: 1 1 auto; word-break: break-word; }
+.fd-drawer-head .sub { color: var(--fd-muted); font-size: 11px; display: block; margin-top: 2px; font-weight: 400; letter-spacing: 0; }
+.fd-drawer .x { background: none; border: 0; color: var(--fd-muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.fd-drawer .x:hover { color: var(--fd-text); }
+.fd-kv { display: grid; grid-template-columns: 92px 1fr; gap: 4px 10px; padding: 10px 12px; }
+.fd-kv dt { color: var(--fd-muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding-top: 2px; }
+.fd-kv dd { margin: 0; color: var(--fd-text); word-break: break-word; }
+.fd-pill { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; letter-spacing: 0.06em; border: 1px solid var(--fd-border); color: var(--fd-muted); }
+.fd-pill.laden { background: var(--fd-accent); color: #111; border-color: var(--fd-accent); font-weight: 700; }
+.fd-pill.ballast { border-color: var(--fd-accent); color: var(--fd-accent); }
+.fd-pill.choke { border-color: var(--fd-accent); color: var(--fd-accent); background: var(--fd-accent-dim); }
+
+/* SPLC map markers */
+.fd-splc-marker {
+  width: 12px; height: 12px; background: #fff; border: 2px solid var(--fd-accent); border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 0 8px rgba(245,166,35,0.6);
+}
+.fd-splc-marker.root { width: 16px; height: 16px; background: var(--fd-accent); border-color: #fff; }
+.fd-splc-marker.supplier { border-color: #2dd4bf; box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 0 8px rgba(45,212,191,0.6); }
+.fd-splc-tip { font-family: var(--fd-mono); font-size: 11px; }
+.fd-splc-tip b { color: var(--fd-accent); }
+.leaflet-tooltip.fd-splc-tt { background: rgba(13,17,23,0.95); color: var(--fd-text); border: 1px solid var(--fd-border); }
+.leaflet-tooltip.fd-splc-tt::before { display: none; }
+
+/* ---------------------------------------------------------------- modals */
+.fd-modal-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; display: none;
+  align-items: center; justify-content: center; padding: 16px;
+}
+.fd-modal-bg.open { display: flex; }
+.fd-modal {
+  width: 100%; max-width: 520px; max-height: 100%; overflow-y: auto;
+  background: var(--fd-panel); border: 1px solid var(--fd-border); border-top: 3px solid var(--fd-accent); border-radius: 6px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6); padding: 16px 18px 18px;
+}
+.fd-modal h2 { margin: 0 0 4px; font-family: var(--fd-mono); font-size: 14px; letter-spacing: 0.12em; color: var(--fd-accent); display: flex; align-items: center; }
+.fd-modal h2 .x { margin-left: auto; background: none; border: 0; color: var(--fd-muted); font-size: 20px; cursor: pointer; line-height: 1; }
+.fd-modal h2 .x:hover { color: var(--fd-text); }
+.fd-modal p.lead { margin: 0 0 14px; color: var(--fd-muted); font-size: 12px; }
+.fd-field { display: block; margin-bottom: 12px; }
+.fd-field > span { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--fd-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fd-muted); margin-bottom: 4px; }
+.fd-field > span a { color: var(--fd-accent); text-decoration: none; text-transform: none; letter-spacing: 0; font-family: var(--fd-sans); font-size: 11px; }
+.fd-field > span a:hover { text-decoration: underline; }
+.fd-field > span em { font-style: normal; color: var(--fd-muted); text-transform: none; letter-spacing: 0; font-family: var(--fd-sans); }
+.fd-field input[type="text"], .fd-field input[type="password"], .fd-field input[type="url"] {
+  width: 100%; height: 32px; padding: 0 10px; background: var(--fd-bg); color: var(--fd-text);
+  border: 1px solid var(--fd-border); border-radius: 4px; font-family: var(--fd-mono); font-size: 12px; outline: none;
+}
+.fd-field input:focus { border-color: var(--fd-accent); }
+.fd-check { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 4px 0 14px; cursor: pointer; }
+.fd-check input { accent-color: var(--fd-accent); width: 16px; height: 16px; }
+.fd-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.fd-btn-primary { background: var(--fd-accent); color: #111; border: 0; border-radius: 4px; height: 32px; padding: 0 16px; font-family: var(--fd-mono); font-weight: 700; letter-spacing: 0.08em; cursor: pointer; }
+.fd-btn-primary:hover { filter: brightness(1.1); }
+.fd-btn-ghost { background: transparent; color: var(--fd-text); border: 1px solid var(--fd-border); border-radius: 4px; height: 32px; padding: 0 14px; font-family: var(--fd-mono); letter-spacing: 0.06em; cursor: pointer; }
+.fd-btn-ghost:hover { border-color: var(--fd-accent); }
+.fd-help-list { list-style: none; margin: 0; padding: 0; font-family: var(--fd-mono); font-size: 12px; }
+.fd-help-list li { display: grid; grid-template-columns: 130px 1fr; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--fd-border); }
+.fd-help-list li:last-child { border-bottom: 0; }
+.fd-help-list code { color: var(--fd-accent); font-family: inherit; }
+.fd-help-list span { color: var(--fd-text); }
+.fd-help-keys { margin-top: 10px; color: var(--fd-muted); font-size: 11px; }
+.fd-help-keys kbd { font-family: var(--fd-mono); border: 1px solid var(--fd-border); border-radius: 3px; padding: 0 5px; color: var(--fd-text); }
+
+/* ---------------------------------------------------------------- phone */
+@media (max-width: 768px) {
+  body { overflow: auto; }
+  #fd-app { height: auto; min-height: 100%; }
+  .fd-top { padding: 0 10px; gap: 8px; }
+  .fd-wordmark { font-size: 13px; letter-spacing: 0.1em; }
+  .fd-wordmark::before { content: "▮"; }
+  .fd-cmd input { padding-right: 10px; }
+  .fd-cmd-hint { display: none; }
+  .fd-cmd-hint.err, .fd-cmd-hint.ok { display: block; right: 8px; background: var(--fd-bg); padding-left: 6px; }
+  .fd-ibtn { padding: 0 8px; }
+  .fd-main { flex-direction: column; }
+  .fd-mapwrap { flex: none; height: 55vh; min-height: 55vh; }
+  .fd-side { width: 100%; border-left: 0; border-top: 1px solid var(--fd-border); flex: none; }
+  .fd-panes { min-height: 60vh; }
+  .fd-pane { position: static; inset: auto; display: none; overflow: visible; }
+  .fd-pane.active { display: block; }
+  .fd-drawer {
+    position: fixed; top: auto; right: 0; left: 0; bottom: 0; width: 100%; max-height: 60vh;
+    border-left: 0; border-top: 3px solid var(--fd-accent); border-radius: 10px 10px 0 0;
+    transform: translateY(20px);
+  }
+  .fd-drawer.open { transform: none; }
+  .fd-modal { padding: 14px; }
+}
+</style>
+</head>
+<body>
+<div id="fd-app"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+/* ===== data/data.js ===== */
+/* FlowDeck data layer — window.FD.data
+ * Plain browser JS, no dependencies. Provides an aisstream.io websocket client,
+ * vessel store (merged PositionReport + ShipStaticData by MMSI), ship-type and
+ * laden/ballast classification, flag-from-MMSI, choke-point membership, and a
+ * synthetic demo feed. See README.md for the public API.
+ */
+(function () {
+  'use strict';
+  window.FD = window.FD || {};
+
+  // ---------------------------------------------------------------- constants
+  var WS_URL = 'wss://stream.aisstream.io/v0/stream';
+  var WORLD_BBOX = [[-90, -180], [90, 180]];
+  var PRUNE_MS = 30 * 60 * 1000;      // drop vessels unseen for 30 min
+  var TICK_MS = 2000;                 // "tick" cadence
+  var VESSEL_EVT_MS = 150;            // min gap between "vessel" events per MMSI
+  var BACKOFF_MIN = 1000, BACKOFF_MAX = 30000;
+
+  // MMSI Maritime Identification Digits (first 3 digits) -> ISO country. Major flag states.
+  var MID = {
+    636: 'LR', 351: 'PA', 352: 'PA', 353: 'PA', 354: 'PA', 355: 'PA', 356: 'PA', 357: 'PA', 370: 'PA', 371: 'PA', 372: 'PA', 373: 'PA',
+    538: 'MH', 215: 'MT', 229: 'MT', 248: 'MT', 249: 'MT', 256: 'MT', 477: 'HK', 563: 'SG', 564: 'SG', 565: 'SG', 566: 'SG',
+    237: 'GR', 239: 'GR', 240: 'GR', 241: 'GR', 308: 'BS', 309: 'BS', 311: 'BS', 209: 'CY', 210: 'CY', 212: 'CY',
+    257: 'NO', 258: 'NO', 259: 'NO', 232: 'GB', 233: 'GB', 234: 'GB', 235: 'GB', 303: 'US', 338: 'US', 366: 'US', 367: 'US', 368: 'US', 369: 'US',
+    412: 'CN', 413: 'CN', 414: 'CN', 431: 'JP', 432: 'JP', 440: 'KR', 441: 'KR', 419: 'IN', 273: 'RU', 422: 'IR',
+    403: 'SA', 470: 'AE', 471: 'AE', 271: 'TR', 247: 'IT', 219: 'DK', 220: 'DK', 244: 'NL', 245: 'NL', 246: 'NL',
+    211: 'DE', 218: 'DE', 226: 'FR', 227: 'FR', 228: 'FR', 710: 'BR', 345: 'MX', 574: 'VN', 525: 'ID', 533: 'MY',
+    567: 'TH', 548: 'PH', 416: 'TW'
+  };
+
+  // Choke points: hand-drawn polygons [lat, lon] bounding the real water bodies.
+  var CHOKE_DEFS = [
+    { id: 'hormuz', name: 'Strait of Hormuz', polygon: [[27.2, 55.4], [27.0, 56.8], [26.4, 57.2], [25.6, 57.3], [25.2, 56.9], [25.6, 56.3], [26.1, 55.7], [26.5, 55.2]] },
+    { id: 'malacca', name: 'Strait of Malacca', polygon: [[6.2, 97.0], [6.0, 99.8], [3.9, 101.2], [2.0, 103.0], [1.0, 104.3], [0.8, 103.5], [1.9, 101.7], [3.6, 100.2], [5.0, 98.2], [5.7, 96.9]] },
+    { id: 'suez', name: 'Suez Canal & Gulf of Suez', polygon: [[31.6, 32.1], [31.4, 32.6], [30.0, 32.7], [29.0, 32.9], [27.6, 34.2], [27.3, 33.8], [28.6, 32.8], [29.8, 32.2], [30.6, 32.1]] },
+    { id: 'babelmandeb', name: 'Bab-el-Mandeb', polygon: [[14.2, 42.1], [13.9, 43.2], [12.9, 43.5], [12.2, 43.9], [11.8, 43.3], [12.4, 42.6], [13.2, 42.0], [13.8, 41.7]] },
+    { id: 'bosphorus', name: 'Bosphorus', polygon: [[41.35, 28.95], [41.30, 29.25], [41.05, 29.20], [40.90, 29.10], [40.85, 28.85], [41.05, 28.90], [41.20, 28.95]] },
+    { id: 'panama', name: 'Panama Canal', polygon: [[9.55, -80.05], [9.50, -79.65], [9.15, -79.55], [8.85, -79.35], [8.75, -79.60], [8.95, -79.95], [9.25, -80.10]] },
+    { id: 'goodhope', name: 'Cape of Good Hope', polygon: [[-33.6, 16.6], [-33.9, 19.2], [-34.6, 21.0], [-35.9, 20.5], [-36.2, 18.5], [-35.5, 16.8], [-34.5, 16.3]] },
+    { id: 'danish', name: 'Danish Straits', polygon: [[58.1, 10.3], [57.8, 11.9], [56.4, 12.9], [55.4, 13.0], [54.8, 12.0], [55.3, 10.4], [56.5, 10.2], [57.4, 10.0]] },
+    { id: 'gibraltar', name: 'Strait of Gibraltar', polygon: [[36.2, -6.2], [36.3, -5.3], [36.1, -5.0], [35.7, -5.1], [35.75, -5.9], [35.85, -6.2], [36.0, -6.35]] }
+  ];
+
+  // ------------------------------------------------------------------- state
+  var vessels = new Map();            // mmsi -> vessel
+  var listeners = { status: [], vessel: [], tick: [] };
+  var lastVesselEmit = new Map();     // mmsi -> ts of last "vessel" event
+  var ws = null, wsOpts = null, wantLive = false, backoff = BACKOFF_MIN, reconnectTimer = null;
+  var tickTimer = null, demoTimer = null, demoActive = false;
+  var demoState = new Map();          // mmsi -> {lane, seg, fwd} (demo only)
+  var statusState = { state: 'closed', msg: 'idle' };
+
+  // ----------------------------------------------------------------- helpers
+  function emit(evt, payload) {
+    var fns = listeners[evt] || [];
+    for (var i = 0; i < fns.length; i++) { try { fns[i](payload); } catch (e) { console.error('FD.data listener error', e); } }
+  }
+  function setStatus(state, msg) { statusState = { state: state, msg: msg || '' }; emit('status', statusState); }
+
+  /** AIS ship type code -> label. */
+  function typeLabel(code, name) {
+    var n = (name || '').toUpperCase();
+    if (/\b(LNG|LPG|GAS)\b/.test(n) || code === 84 || code === 85) return 'LNG/Gas';
+    if (code >= 80 && code <= 89) return 'Tanker';
+    if (code >= 70 && code <= 79) return 'Cargo';
+    return 'Other';
+  }
+
+  /** Laden heuristic per PLAN.md. Returns true | false | null. */
+  function inferLaden(v) {
+    if (v.draught == null || v.draught <= 0) return null;
+    if (v.maxDraught && v.maxDraught > 0) return v.draught >= 0.75 * v.maxDraught;
+    if (v.typeLabel === 'Tanker' || v.typeLabel === 'LNG/Gas') {
+      if (v.draught >= 12.0) return true;
+      if (v.draught < 9.0) return false;
+      return null;
+    }
+    if (v.draught >= 10.0) return true;
+    if (v.draught < 6.5) return false;
+    return null;
+  }
+
+  function flagFromMMSI(mmsi) { return MID[Math.floor(mmsi / 1000000)] || null; }
+
+  /** Ray-casting point-in-polygon. polygon = [[lat,lon],...]. */
+  function pointInPolygon(lat, lon, polygon) {
+    var inside = false;
+    for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      var yi = polygon[i][0], xi = polygon[i][1], yj = polygon[j][0], xj = polygon[j][1];
+      var intersect = ((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function chokeFor(lat, lon) {
+    for (var i = 0; i < chokePoints.length; i++) {
+      if (pointInPolygon(lat, lon, chokePoints[i].polygon)) return chokePoints[i].name;
+    }
+    return null;
+  }
+
+  var chokePoints = CHOKE_DEFS.map(function (c) {
+    var lat = 0, lon = 0;
+    c.polygon.forEach(function (p) { lat += p[0]; lon += p[1]; });
+    return { id: c.id, name: c.name, polygon: c.polygon, center: [lat / c.polygon.length, lon / c.polygon.length], count: 0, tankerCount: 0 };
+  });
+
+  /** Recompute per-choke-point counts from the vessel store. */
+  function recountChokes() {
+    var byName = {};
+    chokePoints.forEach(function (c) { c.count = 0; c.tankerCount = 0; byName[c.name] = c; });
+    vessels.forEach(function (v) {
+      if (!v.chokePoint) return;
+      var c = byName[v.chokePoint]; if (!c) return;
+      c.count++;
+      if (v.typeLabel === 'Tanker' || v.typeLabel === 'LNG/Gas') c.tankerCount++;
+    });
+  }
+
+  function computeStats() {
+    var s = { count: vessels.size, tankers: 0, laden: 0, ballast: 0, chokePoints: [] };
+    vessels.forEach(function (v) {
+      if (v.typeLabel === 'Tanker' || v.typeLabel === 'LNG/Gas') {
+        s.tankers++;
+        if (v.laden === true) s.laden++; else if (v.laden === false) s.ballast++;
+      }
+    });
+    s.chokePoints = chokePoints.map(function (c) { return { id: c.id, name: c.name, count: c.count, tankerCount: c.tankerCount }; });
+    return s;
+  }
+
+  function prune(now) {
+    vessels.forEach(function (v, k) { if (now - v.lastSeen > PRUNE_MS) vessels.delete(k); });
+  }
+
+  function tick() {
+    var now = Date.now();
+    prune(now);
+    recountChokes();
+    emit('tick', computeStats());
+  }
+  function startTick() { if (!tickTimer) tickTimer = setInterval(tick, TICK_MS); }
+  function stopTick() { if (tickTimer) { clearInterval(tickTimer); tickTimer = null; } }
+
+  /** Create-or-update a vessel and (throttled) emit "vessel". */
+  function upsert(mmsi, patch, now) {
+    var v = vessels.get(mmsi);
+    if (!v) {
+      v = { mmsi: mmsi, name: null, imo: null, lat: null, lon: null, cog: null, sog: null, heading: null,
+            shipType: null, typeLabel: 'Other', draught: null, maxDraught: null, laden: null,
+            destination: null, eta: null, lastSeen: now, flag: flagFromMMSI(mmsi), chokePoint: null };
+      vessels.set(mmsi, v);
+    }
+    for (var k in patch) if (patch[k] !== undefined) v[k] = patch[k];
+    v.lastSeen = now;
+    v.typeLabel = typeLabel(v.shipType, v.name);
+    v.laden = inferLaden(v);
+    if (v.lat != null && v.lon != null) v.chokePoint = chokeFor(v.lat, v.lon);
+    var last = lastVesselEmit.get(mmsi) || 0;
+    if (now - last >= VESSEL_EVT_MS) { lastVesselEmit.set(mmsi, now); emit('vessel', v); }
+    return v;
+  }
+
+  // -------------------------------------------------------- aisstream parsing
+  function parseAis(raw) {
+    var msg; try { msg = JSON.parse(raw); } catch (e) { return; }
+    if (!msg || !msg.MetaData) return;
+    var meta = msg.MetaData, mmsi = Number(meta.MMSI);
+    if (!mmsi) return;
+    var now = Date.now();
+    var patch = {};
+    var metaName = (meta.ShipName || '').trim();
+    if (metaName) patch.name = metaName;
+    if (msg.MessageType === 'PositionReport' && msg.Message && msg.Message.PositionReport) {
+      var p = msg.Message.PositionReport;
+      patch.lat = p.Latitude != null ? p.Latitude : meta.latitude;
+      patch.lon = p.Longitude != null ? p.Longitude : meta.longitude;
+      if (typeof p.Cog === 'number' && p.Cog < 360) patch.cog = p.Cog;
+      if (typeof p.Sog === 'number' && p.Sog < 102.3) patch.sog = p.Sog;
+      if (typeof p.TrueHeading === 'number' && p.TrueHeading < 360) patch.heading = p.TrueHeading;
+    } else if (msg.MessageType === 'ShipStaticData' && msg.Message && msg.Message.ShipStaticData) {
+      var s = msg.Message.ShipStaticData;
+      if (s.Name) patch.name = String(s.Name).trim();
+      if (s.ImoNumber) patch.imo = s.ImoNumber;
+      if (typeof s.Type === 'number') patch.shipType = s.Type;
+      if (typeof s.MaximumStaticDraught === 'number' && s.MaximumStaticDraught > 0) patch.draught = s.MaximumStaticDraught;
+      if (s.Destination) patch.destination = String(s.Destination).trim();
+      if (s.Eta && s.Eta.Month) {
+        patch.eta = pad(s.Eta.Month) + '-' + pad(s.Eta.Day) + ' ' + pad(s.Eta.Hour) + ':' + pad(s.Eta.Minute);
+      }
+      if (meta.latitude != null && vessels.get(mmsi) == null) { patch.lat = meta.latitude; patch.lon = meta.longitude; }
+    } else {
+      return;
+    }
+    if (wsOpts && wsOpts.types && wsOpts.types.length) {
+      var v0 = vessels.get(mmsi), lbl = typeLabel(patch.shipType != null ? patch.shipType : (v0 ? v0.shipType : null), patch.name || (v0 && v0.name));
+      var want = wsOpts.types.map(function (t) { return String(t).toLowerCase(); });
+      var known = patch.shipType != null || (v0 && v0.shipType != null);
+      var ok = !known || // unknown-type vessels pass until static data says otherwise
+               (want.indexOf('tanker') >= 0 && lbl === 'Tanker') || (want.indexOf('gas') >= 0 && lbl === 'LNG/Gas') ||
+               (want.indexOf('cargo') >= 0 && lbl === 'Cargo') || (want.indexOf('other') >= 0 && lbl === 'Other');
+      if (!ok) { vessels.delete(mmsi); return; }
+    }
+    upsert(mmsi, patch, now);
+  }
+  function pad(n) { return (n < 10 ? '0' : '') + (n | 0); }
+
+  // -------------------------------------------------------------- websocket
+  function openSocket() {
+    if (!wantLive) return;
+    setStatus('connecting', 'connecting to aisstream.io');
+    try { ws = new WebSocket(WS_URL); } catch (e) { setStatus('error', 'WebSocket unavailable: ' + e.message); scheduleReconnect(); return; }
+    ws.onopen = function () {
+      var sub = { APIKey: wsOpts.apiKey, BoundingBoxes: [wsOpts.bbox || WORLD_BBOX], FilterMessageTypes: ['PositionReport', 'ShipStaticData'] };
+      ws.send(JSON.stringify(sub));
+      backoff = BACKOFF_MIN;
+      setStatus('live', 'subscribed');
+    };
+    ws.onmessage = function (ev) {
+      if (typeof ev.data === 'string') parseAis(ev.data);
+      else if (ev.data && ev.data.text) ev.data.text().then(parseAis);
+    };
+    ws.onerror = function () { setStatus('error', 'websocket error'); };
+    ws.onclose = function (ev) {
+      ws = null;
+      if (wantLive) { setStatus('error', 'closed (' + (ev && ev.code) + '), reconnecting'); scheduleReconnect(); }
+      else setStatus('closed', 'disconnected');
+    };
+  }
+  function scheduleReconnect() {
+    if (reconnectTimer || !wantLive) return;
+    reconnectTimer = setTimeout(function () { reconnectTimer = null; openSocket(); }, backoff);
+    backoff = Math.min(BACKOFF_MAX, backoff * 2);
+  }
+
+  // -------------------------------------------------------------------- demo
+  var NAME_A = ['NORDIC', 'PACIFIC', 'ATLANTIC', 'GULF', 'OCEAN', 'STAR', 'EAGLE', 'FRONT', 'MARAN', 'DELTA', 'MINERVA', 'OLYMPIC', 'SEAWAYS', 'DHT', 'NEW', 'CRUDE', 'ENERGY', 'ASTRO', 'ALMI', 'SONANGOL'];
+  var NAME_B = ['FREEDOM', 'PRIDE', 'GLORY', 'SPIRIT', 'VOYAGER', 'TITAN', 'HARMONY', 'HORIZON', 'PIONEER', 'PHOENIX', 'LEADER', 'TRIDENT', 'JEWEL', 'FALCON', 'ARIES', 'ORION', 'ZENITH', 'CENTURY', 'LIBERTY', 'FORTUNE'];
+  // Lanes: list of waypoints [lat,lon]; vessels placed along segments. dest = plausible destinations.
+  var LANES = [
+    { pts: [[28.6, 49.6], [27.2, 51.3], [26.6, 53.5], [26.4, 56.3], [26.5, 56.6], [25.8, 57.0], [24.9, 58.2], [22.5, 61.0], [19.0, 65.0]], n: 80, tanker: 0.8, dest: ['FUJAIRAH', 'RAS TANURA', 'SIKKA', 'NINGBO', 'ULSAN', 'YOSU', 'CHIBA'] },
+    { pts: [[19.0, 65.0], [12.0, 70.0], [7.5, 78.0], [6.3, 84.0], [6.0, 94.0], [5.5, 98.5], [3.3, 100.7], [1.9, 102.6], [1.25, 103.7], [1.2, 104.3]], n: 70, tanker: 0.65, dest: ['SINGAPORE', 'PENGERANG', 'TANJUNG PELEPAS', 'MAP TA PHUT', 'NINGBO'] },
+    { pts: [[1.2, 104.3], [3.0, 106.0], [8.0, 110.0], [14.0, 112.5], [20.0, 115.5], [22.5, 118.0], [29.0, 123.0], [33.0, 127.0]], n: 40, tanker: 0.55, dest: ['NINGBO', 'QINGDAO', 'ULSAN', 'KAOHSIUNG', 'DALIAN', 'CHIBA'] },
+    { pts: [[29.7, -94.9], [28.6, -94.0], [27.3, -92.5], [25.5, -90.0], [24.3, -86.0], [23.5, -82.0]], n: 35, tanker: 0.6, dest: ['CORPUS CHRISTI', 'HOUSTON', 'ROTTERDAM', 'NINGBO', 'ST CROIX'] },
+    { pts: [[51.95, 3.8], [52.5, 3.0], [54.5, 2.5], [57.0, 1.5], [59.0, 2.0], [60.5, 3.5]], n: 35, tanker: 0.5, dest: ['ROTTERDAM', 'MONGSTAD', 'SULLOM VOE', 'TEESPORT', 'ANTWERP'] },
+    { pts: [[44.7, 37.6], [44.0, 36.0], [42.5, 32.0], [41.6, 29.5], [41.1, 29.05], [40.9, 28.9], [40.5, 27.5]], n: 28, tanker: 0.55, dest: ['NOVOROSSIYSK', 'CEYHAN', 'TUAPSE', 'AUGUSTA', 'TRIESTE'] },
+    { pts: [[6.0, 3.5], [4.5, 5.5], [2.0, 6.5], [-2.0, 7.5], [-6.0, 10.0], [-8.0, 12.5]], n: 28, tanker: 0.7, dest: ['BONNY', 'ESCRAVOS', 'LAGOS', 'ROTTERDAM', 'SIKKA', 'NINGBO'] },
+    { pts: [[10.4, -64.5], [11.5, -66.5], [12.2, -69.0], [14.5, -70.5], [17.5, -68.0], [18.0, -65.0]], n: 22, tanker: 0.6, dest: ['ST EUSTATIUS', 'HOUSTON', 'CURACAO', 'FREEPORT BS'] },
+    { pts: [[12.6, 43.4], [13.6, 42.1], [16.0, 40.5], [20.0, 38.5], [24.0, 36.0], [27.5, 34.0], [29.5, 32.5], [31.2, 32.4]], n: 28, tanker: 0.6, dest: ['SUEZ', 'SIDI KERIR', 'ROTTERDAM', 'YANBU', 'AUGUSTA'] },
+    { pts: [[-34.8, 17.0], [-35.2, 19.0], [-35.0, 21.5], [-33.0, 28.0], [-28.0, 33.0]], n: 15, tanker: 0.7, dest: ['DURBAN', 'NINGBO', 'SIKKA', 'ROTTERDAM'] },
+    { pts: [[9.4, -79.9], [9.2, -79.75], [9.0, -79.55], [8.6, -79.4]], n: 12, tanker: 0.5, dest: ['BALBOA', 'CRISTOBAL', 'LOS ANGELES', 'HOUSTON'] },
+    { pts: [[35.95, -6.1], [35.95, -5.6], [36.0, -5.1], [36.5, -2.0], [37.5, 1.0]], n: 12, tanker: 0.55, dest: ['ALGECIRAS', 'HUELVA', 'CARTAGENA', 'FOS'] },
+    { pts: [[57.6, 10.8], [56.9, 11.9], [56.1, 12.6], [55.5, 12.7], [55.0, 12.9], [54.6, 13.5]], n: 12, tanker: 0.5, dest: ['PRIMORSK', 'GOTHENBURG', 'ROTTERDAM', 'GDANSK'] }
+  ];
+  var FLAG_MIDS = [636, 538, 351, 215, 477, 563, 241, 311, 210, 257, 235, 367, 412, 431, 440, 419, 273, 422, 403, 470, 271, 247, 219, 244, 211, 226];
+
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function bearing(a, b) {
+    var dLon = (b[1] - a[1]) * Math.PI / 180, la1 = a[0] * Math.PI / 180, la2 = b[0] * Math.PI / 180;
+    var y = Math.sin(dLon) * Math.cos(la2), x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon);
+    return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+  }
+
+  function buildDemo() {
+    vessels.clear(); lastVesselEmit.clear(); demoState.clear();
+    var now = Date.now(), seq = 0;
+    LANES.forEach(function (lane) {
+      var segs = lane.pts.length - 1;
+      for (var i = 0; i < lane.n; i++) {
+        var si = Math.floor(Math.random() * segs), t = Math.random();
+        var a = lane.pts[si], b = lane.pts[si + 1];
+        var lat = a[0] + (b[0] - a[0]) * t + rnd(-0.12, 0.12), lon = a[1] + (b[1] - a[1]) * t + rnd(-0.12, 0.12);
+        var fwd = Math.random() < 0.5, cog = fwd ? bearing(a, b) : bearing(b, a);
+        var isTanker = Math.random() < lane.tanker, isGas = isTanker && Math.random() < 0.15;
+        var shipType = isTanker ? (isGas ? 84 : 80 + Math.floor(Math.random() * 4)) : (Math.random() < 0.8 ? 70 + Math.floor(Math.random() * 5) : 30 + Math.floor(Math.random() * 10));
+        var name = pick(NAME_A) + ' ' + pick(NAME_B);
+        if (isGas) name = name + (Math.random() < 0.5 ? ' LNG' : ' GAS');
+        var maxD = isTanker ? rnd(14, 22) : rnd(8, 14), laden = Math.random() < (fwd ? 0.55 : 0.5);
+        var draught = laden ? maxD * rnd(0.8, 0.98) : maxD * rnd(0.4, 0.6);
+        var mmsi = pick(FLAG_MIDS) * 1000000 + 100000 + (seq++ * 7919) % 900000;
+        var sog = Math.random() < 0.08 ? rnd(0, 0.5) : rnd(8, 15);
+        var v = upsert(mmsi, {
+          name: name, imo: 9000000 + Math.floor(rnd(100000, 999999)), lat: lat, lon: lon, cog: Math.round(cog * 10) / 10,
+          sog: Math.round(sog * 10) / 10, heading: Math.round(cog + rnd(-3, 3) + 360) % 360, shipType: shipType,
+          draught: Math.round(draught * 10) / 10, maxDraught: Math.round(maxD * 10) / 10, destination: pick(lane.dest),
+          eta: pad(1 + Math.floor(Math.random() * 12)) + '-' + pad(1 + Math.floor(Math.random() * 28)) + ' ' + pad(Math.floor(Math.random() * 24)) + ':00'
+        }, now);
+        demoState.set(v.mmsi, { lane: lane, seg: si, fwd: fwd });
+      }
+    });
+  }
+
+  /** Advance demo vessels along COG; nudge course toward next waypoint; bounce at lane ends. */
+  function demoStep() {
+    var now = Date.now(), dtH = TICK_MS / 3600000 * 60; // 60x time compression so motion is visible
+    vessels.forEach(function (v) {
+      var d = demoState.get(v.mmsi); if (!d || v.sog == null) return;
+      var distNm = v.sog * dtH, dLat = distNm / 60;
+      var rad = v.cog * Math.PI / 180;
+      var lat = v.lat + dLat * Math.cos(rad), lon = v.lon + dLat * Math.sin(rad) / Math.max(0.2, Math.cos(v.lat * Math.PI / 180));
+      var pts = d.lane.pts, target = d.fwd ? pts[d.seg + 1] : pts[d.seg];
+      var dT = Math.abs(lat - target[0]) + Math.abs(lon - target[1]);
+      if (dT < 0.25) {
+        d.seg += d.fwd ? 1 : -1;
+        if (d.seg >= pts.length - 1 || d.seg < 0) { d.fwd = !d.fwd; d.seg = Math.max(0, Math.min(pts.length - 2, d.seg)); v.draught = v.laden ? v.maxDraught * 0.5 : v.maxDraught * 0.9; }
+        target = d.fwd ? pts[d.seg + 1] : pts[d.seg];
+      }
+      var want = bearing([lat, lon], target), diff = ((want - v.cog + 540) % 360) - 180;
+      v.cog = Math.round(((v.cog + Math.max(-15, Math.min(15, diff)) + 360) % 360) * 10) / 10;
+      v.heading = Math.round(v.cog);
+      v.sog = Math.round(Math.max(0, Math.min(16, v.sog + rnd(-0.3, 0.3))) * 10) / 10;
+      upsert(v.mmsi, { lat: Math.round(lat * 10000) / 10000, lon: Math.round(lon * 10000) / 10000, cog: v.cog, sog: v.sog, heading: v.heading, draught: Math.round(v.draught * 10) / 10 }, now);
+    });
+  }
+
+  function stopDemo() { if (demoTimer) { clearInterval(demoTimer); demoTimer = null; } demoActive = false; demoState.clear(); }
+
+  // -------------------------------------------------------------- public API
+  var api = {
+    /** Open the aisstream.io websocket. opts: { apiKey, bbox?: [[latS,lonW],[latN,lonE]], types?: ["tanker","gas","cargo","other"] } */
+    connect: function (opts) {
+      if (!opts || !opts.apiKey) { setStatus('error', 'apiKey required'); return; }
+      api.disconnect();
+      stopDemo(); vessels.clear(); lastVesselEmit.clear();
+      wsOpts = { apiKey: opts.apiKey, bbox: opts.bbox || WORLD_BBOX, types: opts.types || null };
+      wantLive = true; backoff = BACKOFF_MIN;
+      startTick(); openSocket();
+    },
+    /** Close the socket (no reconnect) and stop demo animation. Vessel store is kept. */
+    disconnect: function () {
+      wantLive = false;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+      stopDemo(); stopTick();
+      setStatus('closed', 'disconnected');
+    },
+    /** Subscribe: "status" ({state,msg}), "vessel" (vessel), "tick" (stats). Returns unsubscribe fn. */
+    on: function (evt, fn) {
+      if (!listeners[evt]) listeners[evt] = [];
+      listeners[evt].push(fn);
+      return function () { var i = listeners[evt].indexOf(fn); if (i >= 0) listeners[evt].splice(i, 1); };
+    },
+    /** Remove a listener. */
+    off: function (evt, fn) { var i = (listeners[evt] || []).indexOf(fn); if (i >= 0) listeners[evt].splice(i, 1); },
+    /** Live Map<mmsi, vessel>. Treat as read-only. */
+    vessels: function () { return vessels; },
+    /** [{id,name,polygon,center,count,tankerCount}] — counts refreshed every tick. */
+    chokePoints: chokePoints,
+    /** Current stats: {count, tankers, laden, ballast, chokePoints:[{id,name,count,tankerCount}]} */
+    stats: function () { recountChokes(); return computeStats(); },
+    /** Current status {state,msg}. */
+    status: function () { return statusState; },
+    /** Seed ~400 synthetic vessels on real lanes and animate them every tick. Emits the same events as live. */
+    loadDemo: function () {
+      api.disconnect();
+      buildDemo();
+      demoActive = true;
+      startTick();
+      demoTimer = setInterval(demoStep, TICK_MS);
+      setStatus('live', 'demo data');
+      tick();
+    },
+    /** True while demo animation is running. */
+    isDemo: function () { return demoActive; },
+    /** Manually advance one tick (prune, recount, emit "tick"); in demo mode also moves vessels. Useful for tests. */
+    step: function () { if (demoActive) demoStep(); tick(); },
+    /** Exposed helpers for testing / reuse. */
+    util: { pointInPolygon: pointInPolygon, chokeFor: chokeFor, typeLabel: typeLabel, inferLaden: inferLaden, flagFromMMSI: flagFromMMSI, parseAis: parseAis }
+  };
+  window.FD.data = api;
+})();
+
+</script>
+<script>
+/* ===== splc/seed.js ===== */
+/* FlowDeck SPLC — static seed dataset (Agent E)
+ * Seed dataset, sourced from public filings. Generated offline 2026-10-15 from
+ * SEC EDGAR 10-K "major customer" / supplier disclosures and Apple's published
+ * Supplier List (FY2023). Every relationship below cites the filing it came from.
+ *
+ * Shape:
+ *   entities[TICKER] = { cik, ticker, name, hq:{city, lat, lon} }   (cik null for non-SEC filers)
+ *   rels[] = { from, to, pct, basis, evidence:{source, snippet, url}, note? }
+ *            from = supplier (sells to), to = customer (buys from)
+ *            pct  = percentage disclosed in the cited filing, or null; `basis` says what it measures
+ *   peers[TICKER] = [tickers]
+ */
+window.FD = window.FD || {};
+FD.splcSeed = (function () {
+  var E = {
+    // ---- roots ----
+    WMT:  { cik: 104169,  ticker: "WMT",  name: "Walmart Inc.",                      hq: { city: "Bentonville, AR",     lat: 36.37,  lon: -94.21 } },
+    AAPL: { cik: 320193,  ticker: "AAPL", name: "Apple Inc.",                        hq: { city: "Cupertino, CA",       lat: 37.32,  lon: -122.03 } },
+    TSLA: { cik: 1318605, ticker: "TSLA", name: "Tesla, Inc.",                       hq: { city: "Austin, TX",          lat: 30.27,  lon: -97.74 } },
+    XOM:  { cik: 2115436, ticker: "XOM",  name: "ExxonMobil",                        hq: { city: "Spring, TX",          lat: 30.08,  lon: -95.42 } },
+    NVDA: { cik: 1045810, ticker: "NVDA", name: "NVIDIA Corp.",                      hq: { city: "Santa Clara, CA",     lat: 37.35,  lon: -121.95 } },
+    COST: { cik: 909832,  ticker: "COST", name: "Costco Wholesale Corp.",            hq: { city: "Issaquah, WA",        lat: 47.53,  lon: -122.03 } },
+    TGT:  { cik: 27419,   ticker: "TGT",  name: "Target Corp.",                      hq: { city: "Minneapolis, MN",     lat: 44.98,  lon: -93.27 } },
+    AMZN: { cik: 1018724, ticker: "AMZN", name: "Amazon.com, Inc.",                  hq: { city: "Seattle, WA",         lat: 47.61,  lon: -122.33 } },
+    F:    { cik: 37996,   ticker: "F",    name: "Ford Motor Co.",                    hq: { city: "Dearborn, MI",        lat: 42.32,  lon: -83.18 } },
+    GM:   { cik: 1467858, ticker: "GM",   name: "General Motors Co.",                hq: { city: "Detroit, MI",         lat: 42.33,  lon: -83.05 } },
+    BA:   { cik: 12927,   ticker: "BA",   name: "The Boeing Co.",                    hq: { city: "Arlington, VA",       lat: 38.88,  lon: -77.10 } },
+    CAT:  { cik: 18230,   ticker: "CAT",  name: "Caterpillar Inc.",                  hq: { city: "Irving, TX",          lat: 32.81,  lon: -96.95 } },
+    DE:   { cik: 315189,  ticker: "DE",   name: "Deere & Co.",                       hq: { city: "Moline, IL",          lat: 41.51,  lon: -90.52 } },
+    KO:   { cik: 21344,   ticker: "KO",   name: "The Coca-Cola Co.",                 hq: { city: "Atlanta, GA",         lat: 33.75,  lon: -84.39 } },
+    PEP:  { cik: 77476,   ticker: "PEP",  name: "PepsiCo, Inc.",                     hq: { city: "Purchase, NY",        lat: 41.04,  lon: -73.71 } },
+    PG:   { cik: 80424,   ticker: "PG",   name: "Procter & Gamble Co.",              hq: { city: "Cincinnati, OH",      lat: 39.10,  lon: -84.51 } },
+    NKE:  { cik: 320187,  ticker: "NKE",  name: "NIKE, Inc.",                        hq: { city: "Beaverton, OR",       lat: 45.49,  lon: -122.80 } },
+    HD:   { cik: 354950,  ticker: "HD",   name: "The Home Depot, Inc.",              hq: { city: "Atlanta, GA",         lat: 33.75,  lon: -84.39 } },
+    LOW:  { cik: 60667,   ticker: "LOW",  name: "Lowe's Companies, Inc.",            hq: { city: "Mooresville, NC",     lat: 35.58,  lon: -80.81 } },
+    MSFT: { cik: 789019,  ticker: "MSFT", name: "Microsoft Corp.",                   hq: { city: "Redmond, WA",         lat: 47.67,  lon: -122.12 } },
+    META: { cik: 1326801, ticker: "META", name: "Meta Platforms, Inc.",              hq: { city: "Menlo Park, CA",      lat: 37.45,  lon: -122.18 } },
+    GOOGL:{ cik: 1652044, ticker: "GOOGL",name: "Alphabet Inc.",                     hq: { city: "Mountain View, CA",   lat: 37.39,  lon: -122.08 } },
+    CVX:  { cik: 93410,   ticker: "CVX",  name: "Chevron Corp.",                     hq: { city: "Houston, TX",         lat: 29.76,  lon: -95.37 } },
+    PFE:  { cik: 78003,   ticker: "PFE",  name: "Pfizer Inc.",                       hq: { city: "New York, NY",        lat: 40.71,  lon: -74.01 } },
+    JNJ:  { cik: 200406,  ticker: "JNJ",  name: "Johnson & Johnson",                 hq: { city: "New Brunswick, NJ",   lat: 40.49,  lon: -74.45 } },
+    // ---- consumer staples / CPG ----
+    CLX:  { cik: 21076,   ticker: "CLX",  name: "The Clorox Co.",                    hq: { city: "Oakland, CA",         lat: 37.80,  lon: -122.27 } },
+    CHD:  { cik: 313927,  ticker: "CHD",  name: "Church & Dwight Co.",               hq: { city: "Ewing, NJ",           lat: 40.27,  lon: -74.80 } },
+    KMB:  { cik: 55785,   ticker: "KMB",  name: "Kimberly-Clark Corp.",              hq: { city: "Irving, TX",          lat: 32.81,  lon: -96.95 } },
+    GIS:  { cik: 40704,   ticker: "GIS",  name: "General Mills, Inc.",               hq: { city: "Minneapolis, MN",     lat: 44.98,  lon: -93.27 } },
+    KHC:  { cik: 1637459, ticker: "KHC",  name: "The Kraft Heinz Co.",               hq: { city: "Pittsburgh, PA",      lat: 40.44,  lon: -80.00 } },
+    TSN:  { cik: 100493,  ticker: "TSN",  name: "Tyson Foods, Inc.",                 hq: { city: "Springdale, AR",      lat: 36.19,  lon: -94.13 } },
+    CL:   { cik: 21665,   ticker: "CL",   name: "Colgate-Palmolive Co.",             hq: { city: "New York, NY",        lat: 40.71,  lon: -74.01 } },
+    CPB:  { cik: 16732,   ticker: "CPB",  name: "The Campbell's Co.",                hq: { city: "Camden, NJ",          lat: 39.93,  lon: -75.12 } },
+    CAG:  { cik: 23217,   ticker: "CAG",  name: "Conagra Brands, Inc.",              hq: { city: "Chicago, IL",         lat: 41.88,  lon: -87.63 } },
+    SJM:  { cik: 91419,   ticker: "SJM",  name: "The J.M. Smucker Co.",              hq: { city: "Orrville, OH",        lat: 40.84,  lon: -81.76 } },
+    HRL:  { cik: 48465,   ticker: "HRL",  name: "Hormel Foods Corp.",                hq: { city: "Austin, MN",          lat: 43.67,  lon: -92.97 } },
+    MAT:  { cik: 63276,   ticker: "MAT",  name: "Mattel, Inc.",                      hq: { city: "El Segundo, CA",      lat: 33.92,  lon: -118.42 } },
+    HAS:  { cik: 46080,   ticker: "HAS",  name: "Hasbro, Inc.",                      hq: { city: "Pawtucket, RI",       lat: 41.88,  lon: -71.38 } },
+    COKE: { cik: 317540,  ticker: "COKE", name: "Coca-Cola Consolidated, Inc.",      hq: { city: "Charlotte, NC",       lat: 35.23,  lon: -80.84 } },
+    CENT: { cik: 887733,  ticker: "CENT", name: "Central Garden & Pet Co.",          hq: { city: "Walnut Creek, CA",    lat: 37.91,  lon: -122.06 } },
+    ELF:  { cik: 1600033, ticker: "ELF",  name: "e.l.f. Beauty, Inc.",               hq: { city: "Oakland, CA",         lat: 37.80,  lon: -122.27 } },
+    LCUT: { cik: 874396,  ticker: "LCUT", name: "Lifetime Brands, Inc.",             hq: { city: "Garden City, NY",     lat: 40.73,  lon: -73.63 } },
+    MNST: { cik: 865752,  ticker: "MNST", name: "Monster Beverage Corp.",            hq: { city: "Corona, CA",          lat: 33.88,  lon: -117.57 } },
+    CELH: { cik: 1341766, ticker: "CELH", name: "Celsius Holdings, Inc.",            hq: { city: "Boca Raton, FL",      lat: 26.37,  lon: -80.13 } },
+    KOF:  { cik: 910631,  ticker: "KOF",  name: "Coca-Cola FEMSA",                   hq: { city: "Mexico City, MX",     lat: 19.43,  lon: -99.13 } },
+    CCEP: { cik: 1650107, ticker: "CCEP", name: "Coca-Cola Europacific Partners",    hq: { city: "Uxbridge, UK",        lat: 51.55,  lon: -0.48 } },
+    DKS:  { cik: 1089063, ticker: "DKS",  name: "DICK'S Sporting Goods, Inc.",       hq: { city: "Coraopolis, PA",      lat: 40.52,  lon: -80.17 } },
+    // ---- tech / semis ----
+    SWKS: { cik: 4127,    ticker: "SWKS", name: "Skyworks Solutions, Inc.",          hq: { city: "Irvine, CA",          lat: 33.68,  lon: -117.83 } },
+    QRVO: { cik: 1604778, ticker: "QRVO", name: "Qorvo, Inc.",                       hq: { city: "Greensboro, NC",      lat: 36.07,  lon: -79.79 } },
+    CRUS: { cik: 772406,  ticker: "CRUS", name: "Cirrus Logic, Inc.",                hq: { city: "Austin, TX",          lat: 30.27,  lon: -97.74 } },
+    GLW:  { cik: 24741,   ticker: "GLW",  name: "Corning Inc.",                      hq: { city: "Corning, NY",         lat: 42.14,  lon: -77.05 } },
+    JBL:  { cik: 898293,  ticker: "JBL",  name: "Jabil Inc.",                        hq: { city: "St. Petersburg, FL",  lat: 27.77,  lon: -82.64 } },
+    TXN:  { cik: 97476,   ticker: "TXN",  name: "Texas Instruments Inc.",            hq: { city: "Dallas, TX",          lat: 32.78,  lon: -96.80 } },
+    AVGO: { cik: 1730168, ticker: "AVGO", name: "Broadcom Inc.",                     hq: { city: "Palo Alto, CA",       lat: 37.44,  lon: -122.14 } },
+    MU:   { cik: 723125,  ticker: "MU",   name: "Micron Technology, Inc.",           hq: { city: "Boise, ID",           lat: 43.62,  lon: -116.21 } },
+    LITE: { cik: 1633978, ticker: "LITE", name: "Lumentum Holdings Inc.",            hq: { city: "San Jose, CA",        lat: 37.34,  lon: -121.89 } },
+    MP:   { cik: 1801368, ticker: "MP",   name: "MP Materials Corp.",                hq: { city: "Las Vegas, NV",       lat: 36.17,  lon: -115.14 } },
+    TSM:  { cik: 1046179, ticker: "TSM",  name: "Taiwan Semiconductor Mfg. Co.",     hq: { city: "Hsinchu, TW",         lat: 24.81,  lon: 120.97 } },
+    HXSCL:{ cik: 2120882, ticker: "HXSCL",name: "SK hynix Inc.",                     hq: { city: "Icheon, KR",          lat: 37.27,  lon: 127.44 } },
+    FN:   { cik: 1408710, ticker: "FN",   name: "Fabrinet",                          hq: { city: "Bangkok, TH",         lat: 13.75,  lon: 100.50 } },
+    HNHPF:{ cik: null,    ticker: "HNHPF",name: "Hon Hai Precision (Foxconn)",       hq: { city: "New Taipei, TW",      lat: 25.07,  lon: 121.50 } },
+    WICOF:{ cik: null,    ticker: "WICOF",name: "Wistron Corp.",                     hq: { city: "New Taipei, TW",      lat: 25.06,  lon: 121.57 } },
+    SSNLF:{ cik: null,    ticker: "SSNLF",name: "Samsung Electronics",               hq: { city: "Suwon, KR",           lat: 37.26,  lon: 127.03 } },
+    PCRFY:{ cik: null,    ticker: "PCRFY",name: "Panasonic Holdings",                hq: { city: "Kadoma, Osaka, JP",   lat: 34.73,  lon: 135.58 } },
+    CATL: { cik: null,    ticker: "CATL", name: "Contemporary Amperex (CATL)",       hq: { city: "Ningde, CN",          lat: 26.67,  lon: 119.55 } },
+    OPENAI:{cik: null,    ticker: "OPENAI",name:"OpenAI (private)",                  hq: { city: "San Francisco, CA",   lat: 37.77,  lon: -122.42 } },
+    CRWV: { cik: 1769628, ticker: "CRWV", name: "CoreWeave, Inc.",                   hq: { city: "Livingston, NJ",      lat: 40.80,  lon: -74.31 } },
+    SNAP: { cik: 1564408, ticker: "SNAP", name: "Snap Inc.",                         hq: { city: "Santa Monica, CA",    lat: 34.02,  lon: -118.49 } },
+    PINS: { cik: 1506293, ticker: "PINS", name: "Pinterest, Inc.",                   hq: { city: "San Francisco, CA",   lat: 37.77,  lon: -122.42 } },
+    RIVN: { cik: 1874178, ticker: "RIVN", name: "Rivian Automotive, Inc.",           hq: { city: "Irvine, CA",          lat: 33.68,  lon: -117.83 } },
+    // ---- industrial / aero / auto ----
+    HXL:  { cik: 717605,  ticker: "HXL",  name: "Hexcel Corp.",                      hq: { city: "Stamford, CT",        lat: 41.05,  lon: -73.54 } },
+    DCO:  { cik: 30305,   ticker: "DCO",  name: "Ducommun Inc.",                     hq: { city: "Costa Mesa, CA",      lat: 33.64,  lon: -117.92 } },
+    HWM:  { cik: 4281,    ticker: "HWM",  name: "Howmet Aerospace Inc.",             hq: { city: "Pittsburgh, PA",      lat: 40.44,  lon: -80.00 } },
+    GE:   { cik: 40545,   ticker: "GE",   name: "GE Aerospace",                      hq: { city: "Evendale, OH",        lat: 39.26,  lon: -84.42 } },
+    MAS:  { cik: 62996,   ticker: "MAS",  name: "Masco Corp.",                       hq: { city: "Livonia, MI",         lat: 42.37,  lon: -83.35 } },
+    FBIN: { cik: 1519751, ticker: "FBIN", name: "Fortune Brands Innovations",        hq: { city: "Deerfield, IL",       lat: 42.17,  lon: -87.84 } },
+    UFPI: { cik: 912767,  ticker: "UFPI", name: "UFP Industries, Inc.",              hq: { city: "Grand Rapids, MI",    lat: 42.96,  lon: -85.67 } },
+    TREX: { cik: 1069878, ticker: "TREX", name: "Trex Co., Inc.",                    hq: { city: "Winchester, VA",      lat: 39.19,  lon: -78.16 } },
+    SWK:  { cik: 93556,   ticker: "SWK",  name: "Stanley Black & Decker",            hq: { city: "New Britain, CT",     lat: 41.66,  lon: -72.78 } },
+    WHR:  { cik: 106640,  ticker: "WHR",  name: "Whirlpool Corp.",                   hq: { city: "Benton Harbor, MI",   lat: 42.12,  lon: -86.45 } },
+    LEA:  { cik: 842162,  ticker: "LEA",  name: "Lear Corp.",                        hq: { city: "Southfield, MI",      lat: 42.47,  lon: -83.22 } },
+    BWA:  { cik: 908255,  ticker: "BWA",  name: "BorgWarner Inc.",                   hq: { city: "Auburn Hills, MI",    lat: 42.69,  lon: -83.23 } },
+    GNTX: { cik: 355811,  ticker: "GNTX", name: "Gentex Corp.",                      hq: { city: "Zeeland, MI",         lat: 42.81,  lon: -86.02 } },
+    VC:   { cik: 1111335, ticker: "VC",   name: "Visteon Corp.",                     hq: { city: "Van Buren Twp., MI",  lat: 42.22,  lon: -83.49 } },
+    DAN:  { cik: 26780,   ticker: "DAN",  name: "Dana Inc.",                         hq: { city: "Maumee, OH",          lat: 41.56,  lon: -83.65 } },
+    ADNT: { cik: 1670541, ticker: "ADNT", name: "Adient plc",                        hq: { city: "Dublin, IE",          lat: 53.35,  lon: -6.26 } },
+    TWI:  { cik: 899751,  ticker: "TWI",  name: "Titan International, Inc.",         hq: { city: "West Chicago, IL",    lat: 41.88,  lon: -88.20 } },
+    DCI:  { cik: 29644,   ticker: "DCI",  name: "Donaldson Co., Inc.",               hq: { city: "Bloomington, MN",     lat: 44.84,  lon: -93.30 } },
+    // ---- energy services ----
+    NE:   { cik: 1895262, ticker: "NE",   name: "Noble Corp. plc",                   hq: { city: "Houston, TX",         lat: 29.76,  lon: -95.37 } },
+    PUMP: { cik: 1680247, ticker: "PUMP", name: "ProPetro Holding Corp.",            hq: { city: "Midland, TX",         lat: 32.00,  lon: -102.08 } },
+    RIG:  { cik: 1451505, ticker: "RIG",  name: "Transocean Ltd.",                   hq: { city: "Steinhausen, CH",     lat: 47.19,  lon: 8.52 } },
+    // ---- pharma distribution ----
+    MCK:  { cik: 927653,  ticker: "MCK",  name: "McKesson Corp.",                    hq: { city: "Irving, TX",          lat: 32.81,  lon: -96.95 } },
+    COR:  { cik: 1140859, ticker: "COR",  name: "Cencora, Inc.",                     hq: { city: "Conshohocken, PA",    lat: 40.08,  lon: -75.30 } },
+    CAH:  { cik: 721371,  ticker: "CAH",  name: "Cardinal Health, Inc.",             hq: { city: "Dublin, OH",          lat: 40.10,  lon: -83.11 } }
+  };
+
+  // helper: from (supplier) -> to (customer)
+  function r(from, to, pct, basis, source, snippet, url, note) {
+    var o = { from: from, to: to, pct: pct, basis: basis, evidence: { source: source, snippet: snippet, url: url } };
+    if (note) o.note = note;
+    return o;
+  }
+  var A = "https://www.sec.gov/Archives/edgar/data/";
+  var APPLE_LIST = "https://s203.q4cdn.com/367071867/files/doc_downloads/2024/04/Apple-Supplier-List.pdf";
+
+  var R = [
+    // ===== Walmart as customer =====
+    r("PG",  "WMT", 16,   "share of P&G net sales",        "P&G 10-K FY2025",        "Sales to Walmart Inc. and its affiliates represent approximately 16% of our total sales in 2025.", A + "80424/000008042425000076/pg-20250630.htm"),
+    r("PEP", "WMT", 14,   "share of PepsiCo net revenue",  "PepsiCo 10-K FY2025",    "Sales to Walmart and its affiliates, including Sam's, represented approximately 14% of consolidated net revenue.", A + "77476/000007747626000007/pep-20251227.htm"),
+    r("KMB", "WMT", 16,   "share of K-C net sales",        "Kimberly-Clark 10-K FY2025", "Our largest customer, Walmart Inc., represented approximately 16% in 2025 and 2024 of net sales.", A + "55785/000162828026007567/kmb-20251231.htm"),
+    r("CLX", "WMT", 26,   "share of Clorox net sales",     "Clorox 10-K FY2026",     "Net sales to largest customer, Walmart and affiliates, were 26% of consolidated net sales for fiscal 2026.", A + "21076/000002107626000034/clx-20260630.htm"),
+    r("CHD", "WMT", 23,   "share of C&D net sales",        "Church & Dwight 10-K FY2025", "Net sales to our largest customer, Walmart, were approximately 23% of consolidated net sales.", A + "313927/000119312526048139/chd-20251231.htm"),
+    r("GIS", "WMT", 22,   "share of General Mills net sales", "General Mills 10-K FY2026", "Walmart and its affiliates accounted for 22 percent of our consolidated net sales.", A + "40704/000162828026046466/gis-20260531.htm"),
+    r("KHC", "WMT", 21,   "share of Kraft Heinz net sales", "Kraft Heinz 10-K FY2025", "Our largest customer, Walmart Inc., represented approximately 21% of our net sales in 2025.", A + "1637459/000163745926000009/khc-20251227.htm"),
+    r("TSN", "WMT", 18.7, "share of Tyson sales",          "Tyson Foods 10-K FY2025", "Walmart Inc. accounted for approximately 18.7% of our fiscal 2025 consolidated sales.", A + "100493/000010049325000095/tsn-20250927.htm"),
+    r("CL",  "WMT", 11,   "share of Colgate net sales",    "Colgate-Palmolive 10-K FY2025", "Sales to Walmart, Inc. and affiliates represented approximately 11% of our Net sales in 2025.", A + "21665/000002166526000006/cl-20251231.htm"),
+    r("CPB", "WMT", 22,   "share of Campbell's net sales", "Campbell's 10-K FY2026", "Our largest customer, Walmart Inc. and affiliates, accounted for approximately 22% of consolidated net sales.", A + "16732/000001673226000026/cpb-20260802.htm"),
+    r("CAG", "WMT", 29,   "share of Conagra net sales",    "Conagra 10-K FY2026",    "Our largest customer, Walmart and affiliates, accounted for approximately 29% of consolidated net sales.", A + "23217/000110465926083905/tmb-20260531x10k.htm"),
+    r("SJM", "WMT", 34,   "share of Smucker net sales",    "J.M. Smucker 10-K FY2026", "Sales to Walmart Inc. and subsidiaries, including Sam's Club, amounted to 34 percent of net sales.", A + "91419/000009141926000050/sjm-20260430.htm"),
+    r("HRL", "WMT", 15.6, "share of Hormel gross sales",   "Hormel 10-K FY2025",     "Sales to largest customer, Walmart, accounted for 15.6 percent of consolidated gross sales.", A + "48465/000004846525000059/hrl-20251026.htm"),
+    r("COKE","WMT", 17,   "share of Coke Consolidated net sales", "Coca-Cola Consolidated 10-K FY2025", "Approximate percent of total net sales: Walmart Inc. 17%.", A + "317540/000162828026009057/coke-20251231.htm"),
+    r("CENT","WMT", 17,   "share of Central net sales",    "Central Garden & Pet 10-K FY2025", "Walmart, our largest customer, accounted for approximately 17% of total net sales in fiscal 2025.", A + "887733/000088773325000041/cent-20250927.htm"),
+    r("ELF", "WMT", 13,   "share of e.l.f. net sales",     "e.l.f. Beauty 10-K FY2026", "Largest customers Target, Walmart, Amazon and Sephora accounted for 18%, 13%, 11% and 10%.", A + "1600033/000160003326000020/elf-20260331.htm"),
+    r("LCUT","WMT", 17,   "share of Lifetime net sales",   "Lifetime Brands 10-K FY2025", "Walmart accounted for 17% of consolidated net sales in 2025.", A + "874396/000087439626000008/lcut-20251231.htm"),
+    r("MAT", "WMT", null, "Walmart $1.08B of 2025 net sales", "Mattel 10-K FY2025",  "Three largest customers (Walmart $1.08B, Target $0.63B, Amazon $0.52B) were 42% of net sales.", A + "63276/000162828026010716/mat-20251231.htm"),
+    r("HAS", "WMT", 9,    "share of Hasbro net revenues",  "Hasbro 10-K FY2025",     "Amazon.com and Wal-Mart accounted for approximately 11% and 9%, respectively, of consolidated net revenues.", A + "46080/000004608026000011/has-20251228.htm"),
+    // ===== Target / Amazon / Costco as customers =====
+    r("ELF", "TGT", 18,   "share of e.l.f. net sales",     "e.l.f. Beauty 10-K FY2026", "Largest customers Target, Walmart, Amazon and Sephora accounted for 18%, 13%, 11% and 10%.", A + "1600033/000160003326000020/elf-20260331.htm"),
+    r("MAT", "TGT", null, "Target $0.63B of 2025 net sales", "Mattel 10-K FY2025",   "Three largest customers (Walmart $1.08B, Target $0.63B, Amazon $0.52B) were 42% of net sales.", A + "63276/000162828026010716/mat-20251231.htm"),
+    r("ELF", "AMZN", 11,  "share of e.l.f. net sales",     "e.l.f. Beauty 10-K FY2026", "Largest customers Target, Walmart, Amazon and Sephora accounted for 18%, 13%, 11% and 10%.", A + "1600033/000160003326000020/elf-20260331.htm"),
+    r("HAS", "AMZN", 11,  "share of Hasbro net revenues",  "Hasbro 10-K FY2025",     "Amazon.com and Wal-Mart accounted for approximately 11% and 9%, respectively, of consolidated net revenues.", A + "46080/000004608026000011/has-20251228.htm"),
+    r("LCUT","AMZN", 12,  "share of Lifetime net sales",   "Lifetime Brands 10-K FY2025", "Sales to Amazon accounted for 12% of consolidated net sales in 2025.", A + "874396/000087439626000008/lcut-20251231.htm"),
+    r("MAT", "AMZN", null,"Amazon $0.52B of 2025 net sales", "Mattel 10-K FY2025",   "Three largest customers (Walmart $1.08B, Target $0.63B, Amazon $0.52B) were 42% of net sales.", A + "63276/000162828026010716/mat-20251231.htm"),
+    r("RIVN","AMZN", null,"electric delivery vans to Amazon Logistics", "Rivian 10-K FY2025", "A significant portion of our automotive revenues has been from Amazon Logistics, Inc.", A + "1874178/000187417826000008/rivn-20251231.htm"),
+    r("CENT","AMZN", null,"named among top retail customers", "Central Garden & Pet 10-K FY2025", "Together with Costco, Lowe's and Amazon these major retailers represented approximately 54% of net sales.", A + "887733/000088773325000041/cent-20250927.htm"),
+    r("LCUT","COST", 11,  "share of Lifetime net sales",   "Lifetime Brands 10-K FY2025", "Sales to Costco accounted for 11% of consolidated net sales.", A + "874396/000087439626000008/lcut-20251231.htm"),
+    r("CENT","COST", null,"named among top retail customers", "Central Garden & Pet 10-K FY2025", "Together with Costco, Lowe's and Amazon these major retailers represented approximately 54% of net sales.", A + "887733/000088773325000041/cent-20250927.htm"),
+    // AWS / Google Cloud as suppliers to internet companies
+    r("AMZN","SNAP", null,"AWS cloud infrastructure",       "Snap 10-K FY2025",       "We rely on Google Cloud and Amazon Web Services for the vast majority of our computing, storage, bandwidth.", A + "1564408/000156440826000013/snap-20251231.htm"),
+    r("GOOGL","SNAP",null,"Google Cloud infrastructure",   "Snap 10-K FY2025",       "We rely on Google Cloud and Amazon Web Services for the vast majority of our computing, storage, bandwidth.", A + "1564408/000156440826000013/snap-20251231.htm"),
+    r("AMZN","PINS", null,"AWS cloud infrastructure",       "Pinterest 10-K FY2025",  "Disruption of, degradation in or interference with our use of Amazon Web Services and our infrastructure.", A + "1506293/000150629326000021/pins-20251231.htm"),
+    // ===== Apple suppliers =====
+    r("SWKS","AAPL", 67,  "share of Skyworks net revenue", "Skyworks 10-K FY2025",   "Apple, through distributors and contract manufacturers, in aggregate accounted for 67% of net revenue in fiscal 2025.", A + "4127/000000412725000085/swks-20251003.htm"),
+    r("QRVO","AAPL", 50,  "share of Qorvo revenue",        "Qorvo 10-K FY2026",      "Our largest end customer, Apple, accounted for 50% and 47% of total revenue in fiscal 2026 and 2025.", A + "1604778/000162828026032873/rfmd-20260328.htm"),
+    r("CRUS","AAPL", 91,  "share of Cirrus net sales",     "Cirrus Logic 10-K FY2026", "One end customer, Apple Inc., represented approximately 91 percent of the Company's total net sales.", A + "772406/000077240626000018/crus-20260328.htm"),
+    r("GLW", "AAPL", null,"cover glass / Ceramic Shield",  "Corning 10-K FY2025",    "We collaborated with Apple to deliver durable glass with infused color for iPhone 15; Ceramic Shield.", A + "24741/000002474126000124/glw-20251231.htm"),
+    r("TSM", "AAPL", null,"foundry; on Apple Supplier List","Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("HNHPF","AAPL",null,"final assembly; on Apple Supplier List","Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("AVGO","AAPL", null,"RF/wireless components; on Apple Supplier List","Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("TXN", "AAPL", null,"analog semis; on Apple Supplier List","Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("MU",  "AAPL", null,"memory; on Apple Supplier List","Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("JBL", "AAPL", null,"EMS; on Apple Supplier List",   "Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("LITE","AAPL", null,"optical components; on Apple Supplier List","Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("SSNLF","AAPL",null,"displays/memory; on Apple Supplier List","Apple Supplier List FY2023", "Supplier list represents 98 percent of direct spend for materials, manufacturing, and assembly.", APPLE_LIST),
+    r("MP",  "AAPL", null,"long-term rare-earth magnet agreement", "MP Materials 10-K FY2025", "Risks related to the Company's ability to meet obligations of its long-term agreement with Apple Inc.", A + "1801368/000180136826000008/mp-20251231.htm"),
+    // ===== NVIDIA =====
+    r("TSM", "NVDA", null,"wafer foundry",                 "NVIDIA 10-K FY2026",     "We utilize foundries, such as Taiwan Semiconductor Manufacturing Company Limited and Samsung, to produce our wafers.", A + "1045810/000104581026000021/nvda-20260125.htm"),
+    r("SSNLF","NVDA",null,"foundry and memory",            "NVIDIA 10-K FY2026",     "We utilize foundries, such as TSMC and Samsung Electronics; we purchase memory from SK Hynix, Micron, and Samsung.", A + "1045810/000104581026000021/nvda-20260125.htm"),
+    r("HXSCL","NVDA",null,"HBM memory",                    "NVIDIA 10-K FY2026",     "We purchase memory from SK Hynix Inc., Micron Technology, Inc., and Samsung.", A + "1045810/000104581026000021/nvda-20260125.htm"),
+    r("MU",  "NVDA", null,"HBM memory",                    "NVIDIA 10-K FY2026",     "We purchase memory from SK Hynix Inc., Micron Technology, Inc., and Samsung.", A + "1045810/000104581026000021/nvda-20260125.htm"),
+    r("HNHPF","NVDA",null,"assembly, test and packaging",  "NVIDIA 10-K FY2026",     "Contract manufacturers such as Hon Hai Precision, Wistron, and Fabrinet perform assembly, testing and packaging.", A + "1045810/000104581026000021/nvda-20260125.htm"),
+    r("WICOF","NVDA",null,"assembly, test and packaging",  "NVIDIA 10-K FY2026",     "Contract manufacturers such as Hon Hai Precision, Wistron, and Fabrinet perform assembly, testing and packaging.", A + "1045810/000104581026000021/nvda-20260125.htm"),
+    r("FN",  "NVDA", null,"assembly, test and packaging",  "NVIDIA 10-K FY2026",     "Contract manufacturers such as Hon Hai Precision, Wistron, and Fabrinet perform assembly, testing and packaging.", A + "1045810/000104581026000021/nvda-20260125.htm"),
+    r("NVDA","CRWV", null,"all GPUs in fleet are NVIDIA",  "CoreWeave 10-K FY2025",  "As a result of obligations in our customer contracts, all of the GPUs used in our infrastructure today are NVIDIA GPUs.", A + "1769628/000176962826000104/crwv-20251231.htm"),
+    // ===== Tesla =====
+    r("PCRFY","TSLA",null,"lithium-ion battery cells",     "Tesla 10-K FY2025",      "Currently, we rely on suppliers such as Panasonic and Contemporary Amperex Technology Co. Limited (CATL) for these cells.", A + "1318605/000162828026003952/tsla-20251231.htm"),
+    r("CATL","TSLA", null,"lithium-ion battery cells",     "Tesla 10-K FY2025",      "Currently, we rely on suppliers such as Panasonic and Contemporary Amperex Technology Co. Limited (CATL) for these cells.", A + "1318605/000162828026003952/tsla-20251231.htm"),
+    // ===== Energy =====
+    r("NE",  "XOM", 19.7, "share of Noble operating revenues", "Noble 10-K FY2025",  "Revenues from customers as percentage of consolidated operating revenues: Exxon Mobil Corporation 19.7%.", A + "1895262/000189526226000076/ne-20251231.htm"),
+    r("PUMP","XOM", 24.9, "share of ProPetro revenue",     "ProPetro 10-K FY2025",   "Exxon Mobil Corporation, Occidental, EOG and Permian Resources accounted for 24.9%, 13.7%, 12.1%, and 11.2%.", A + "1680247/000168024726000028/pump-20251231.htm"),
+    r("RIG", "CVX", null, "Chevron 11% of Transocean backlog", "Transocean 10-K FY2025", "Customers with most significant backlog were Petrobras, Equinor, BP, Shell, Chevron and Woodside: 20, 16, 16, 12, 11 percent.", A + "1451505/000145150526000018/rig-20251231x10k.htm"),
+    // ===== Autos =====
+    r("LEA", "GM",  22,   "share of Lear net sales",       "Lear 10-K FY2025",       "In 2025, General Motors accounted for 22% of our net sales. Ford accounted for 12%.", A + "842162/000084216226000011/lear-20251231.htm"),
+    r("LEA", "F",   12,   "share of Lear net sales",       "Lear 10-K FY2025",       "In 2025, General Motors accounted for 22% of our net sales. Ford accounted for 12%.", A + "842162/000084216226000011/lear-20251231.htm"),
+    r("BWA", "F",   12,   "share of BorgWarner net sales", "BorgWarner 10-K FY2025", "Worldwide sales in 2025 to Volkswagen and Ford constituted approximately 13% and 12% of consolidated net sales.", A + "908255/000090825526000011/bwa-20251231.htm"),
+    r("VC",  "F",   26,   "share of Visteon net sales",    "Visteon 10-K FY2025",    "Percentage of total net sales 2025: Ford 26%, General Motors 12%, Volkswagen 10%.", A + "1111335/000111133526000006/vc-20251231.htm"),
+    r("VC",  "GM",  12,   "share of Visteon net sales",    "Visteon 10-K FY2025",    "Percentage of total net sales 2025: Ford 26%, General Motors 12%, Volkswagen 10%.", A + "1111335/000111133526000006/vc-20251231.htm"),
+    r("DAN", "F",   32,   "share of Dana sales",           "Dana 10-K FY2025",       "As a percentage of total sales from operations, our sales to Ford were approximately 32% in 2025.", A + "26780/000143774926006076/dan20251231_10k.htm"),
+    r("ADNT","F",   11,   "share of Adient net sales",     "Adient 10-K FY2025",     "Ford Motor Company comprised 11% of consolidated net sales in fiscal 2025 across all segments.", A + "1670541/000167054125000152/adnt-20250930.htm"),
+    r("GNTX","GM",  null, "GM is a 10%+ customer (pct not stated)", "Gentex 10-K FY2025", "Three automotive customers each account for 10% or more of net sales: Toyota, Volkswagen Group, and General Motors.", A + "355811/000035581126000010/gntx-20251231.htm"),
+    r("MP",  "GM",  null, "long-term magnet supply agreement", "MP Materials 10-K FY2025", "Received the final $50.0 million prepayment for magnetic precursor products pursuant to long-term supply agreement with GM.", A + "1801368/000180136826000008/mp-20251231.htm"),
+    // ===== Aerospace =====
+    r("HXL", "BA",  13,   "share of Hexcel net sales",     "Hexcel 10-K FY2025",     "Approximately 13%, 15% and 15% of our 2025, 2024 and 2023 net sales were to Boeing and its subcontractors.", A + "717605/000119312526046377/hxl-20251231.htm"),
+    r("DCO", "BA",  13.3, "share of Ducommun net revenues","Ducommun 10-K FY2025",   "Boeing and RTX were our largest customers, with Boeing generating 13% and RTX 18% of 2025 net revenues.", A + "30305/000162828026011952/dco-20251231.htm"),
+    r("HWM", "BA",  null, "Boeing named as key customer",  "Howmet 10-K FY2025",     "Quality control issues at The Boeing Company ... negatively impacted; loss of a key customer could adversely affect Howmet.", A + "4281/000000428126000012/hwm-20251231.htm"),
+    r("GE",  "BA",  null, "jet engines (sole source on some models)", "GE Aerospace 10-K FY2025", "CES customers consist primarily of airframers and airlines, including both Boeing and Airbus.", A + "40545/000004054526000008/ge-20251231.htm"),
+    // ===== Industrials =====
+    r("DCI", "CAT", null, "AFSI 50/50 filter JV",          "Donaldson 10-K FY2026",  "AFSI, established by the Company and Caterpillar in 1986, manufactures fluid filters used in Caterpillar's machinery worldwide.", A + "29644/000002964426000085/dci-20260731.htm"),
+    r("TWI", "DE",  10,   "share of Titan net sales",      "Titan International 10-K FY2025", "Net sales to Deere & Company represented 10% and 11% of consolidated net sales for 2025 and 2024.", A + "899751/000089975126000007/twi-20251231.htm"),
+    // ===== Beverages =====
+    r("KO",  "KOF", null, "concentrate to largest bottler", "Coca-Cola 10-K FY2025", "Our five largest independent bottling partners based on unit case volume in 2025: Coca-Cola FEMSA, CCEP, ...", A + "21344/000162828026010047/ko-20251231.htm"),
+    r("KO",  "CCEP",null, "concentrate to bottler",        "Coca-Cola 10-K FY2025",  "Our five largest independent bottling partners based on unit case volume in 2025: Coca-Cola FEMSA, CCEP, ...", A + "21344/000162828026010047/ko-20251231.htm"),
+    r("KO",  "COKE",null, "concentrate to bottler (stake sold 2025)", "Coca-Cola 10-K FY2025", "Gain of $1,952 million related to the sale of our ownership interest in Coca-Cola Consolidated, an equity method investee.", A + "21344/000162828026010047/ko-20251231.htm"),
+    r("MNST","KO",  3,    "share of Monster net sales",    "Monster Beverage 10-K FY2025", "The Coca-Cola Company, through wholly-owned subsidiaries, accounted for approximately 3% of net sales.", A + "865752/000110465926020831/mnst-20251231x10k.htm"),
+    r("MNST","CCEP",15,   "share of Monster net sales",    "Monster Beverage 10-K FY2025", "Coca-Cola Europacific Partners accounted for approximately 15% of our net sales for 2025.", A + "865752/000110465926020831/mnst-20251231x10k.htm"),
+    r("MNST","COKE",10,   "share of Monster net sales",    "Monster Beverage 10-K FY2025", "Coca-Cola Consolidated, Inc. accounted for approximately 10% of our net sales for 2025.", A + "865752/000110465926020831/mnst-20251231x10k.htm"),
+    r("CELH","PEP", 43.2, "share of Celsius revenue",      "Celsius 10-K FY2025",    "In 2025, sales to Pepsi constituted 43.2% of our total revenue.", A + "1341766/000134176626000024/celh-20251231.htm"),
+    // ===== Nike =====
+    r("NKE", "DKS", 31,   "share of DICK'S merchandise purchases", "DICK'S Sporting Goods 10-K FY2025", "Nike, our largest vendor, representing approximately 31% of consolidated merchandise purchases within DICK'S and Foot Locker.", A + "1089063/000108906326000007/dks-20260131.htm"),
+    // ===== Home improvement =====
+    r("MAS", "HD",  38,   "share of Masco net sales",      "Masco 10-K FY2025",      "In 2025, our net sales to The Home Depot were $2.9 billion (approximately 38 percent of consolidated net sales).", A + "62996/000006299626000005/mas-20251231.htm"),
+    r("FBIN","HD",  11,   "share of FBIN net sales",       "Fortune Brands 10-K FY2025", "Lowe's and The Home Depot each accounted for 11% of our net sales in 2025.", A + "1519751/000119312526063960/fbin-20251227.htm"),
+    r("FBIN","LOW", 11,   "share of FBIN net sales",       "Fortune Brands 10-K FY2025", "Lowe's and The Home Depot each accounted for 11% of our net sales in 2025.", A + "1519751/000119312526063960/fbin-20251227.htm"),
+    r("UFPI","HD",  17,   "share of UFP net sales",        "UFP Industries 10-K FY2025", "The Home Depot and Lowes accounted for approximately 17% and 11% of total net sales in fiscal 2025.", A + "912767/000110465926019567/ufpi-20251227x10k.htm"),
+    r("UFPI","LOW", 11,   "share of UFP net sales",        "UFP Industries 10-K FY2025", "The Home Depot and Lowes accounted for approximately 17% and 11% of total net sales in fiscal 2025.", A + "912767/000110465926019567/ufpi-20251227x10k.htm"),
+    r("SWK", "HD",  15,   "share of SBD net sales",        "Stanley Black & Decker 10-K FY2025", "The Home Depot accounted for approximately 15% of consolidated net sales in 2025, while Lowe's accounted for 12%.", A + "93556/000009355626000009/swk-20260103.htm"),
+    r("SWK", "LOW", 12,   "share of SBD net sales",        "Stanley Black & Decker 10-K FY2025", "The Home Depot accounted for approximately 15% of consolidated net sales in 2025, while Lowe's accounted for 12%.", A + "93556/000009355626000009/swk-20260103.htm"),
+    r("WHR", "LOW", 15,   "share of Whirlpool net sales",  "Whirlpool 10-K FY2025",  "Sales to Lowe's represented approximately 15%, 13%, and 13% of consolidated net sales in 2025, 2024 and 2023.", A + "106640/000010664026000009/whr-20251231.htm"),
+    r("CENT","HD",  16,   "share of Central net sales",    "Central Garden & Pet 10-K FY2025", "Home Depot, our second largest customer, represented approximately 16% of total net sales in fiscal 2025.", A + "887733/000088773325000041/cent-20250927.htm"),
+    r("CENT","LOW", null, "Lowe's Vendor Partner of the Year", "Central Garden & Pet 10-K FY2025", "Central was recognized as Lowe's Vendor Partner of the Year for the Lawn & Garden division.", A + "887733/000088773325000041/cent-20250927.htm"),
+    r("TREX","HD",  null, "three customers = 73% of sales (not split)", "Trex 10-K FY2025", "Home Depot and Lowe's serve both contractor and DIY markets; three customers represented approximately 73% of net sales.", A + "1069878/000119312526068732/trex-20251231.htm"),
+    r("TREX","LOW", null, "three customers = 73% of sales (not split)", "Trex 10-K FY2025", "Home Depot and Lowe's serve both contractor and DIY markets; three customers represented approximately 73% of net sales.", A + "1069878/000119312526068732/trex-20251231.htm"),
+    // ===== Cloud / AI =====
+    r("CRWV","MSFT", 67,  "share of CoreWeave revenue",    "CoreWeave 10-K FY2025",  "We recognized approximately 67% of our revenue from our top customer, Microsoft, for the year ended December 31, 2025.", A + "1769628/000176962826000104/crwv-20251231.htm"),
+    r("CRWV","META", null,"up to $14.2B commitment through 2031", "CoreWeave 10-K FY2025", "Meta Platforms initially committed to pay us up to approximately $14.2 billion through December 2031.", A + "1769628/000176962826000104/crwv-20251231.htm"),
+    r("CRWV","OPENAI",null,"up to $11.9B commitment through 2030", "CoreWeave 10-K FY2025", "OpenAI has committed to pay us up to approximately $11.9 billion through October 2030.", A + "1769628/000176962826000104/crwv-20251231.htm"),
+    r("MSFT","OPENAI",null,"$24.1B FY2026 revenue from OpenAI arrangements", "Microsoft 10-K FY2026", "For fiscal year 2026, we recorded revenue from commercial arrangements with OpenAI of $24.1 billion.", A + "789019/000119312526323660/msft-20260630.htm"),
+    // ===== Pharma distribution =====
+    r("PFE", "MCK", 25,   "share of Pfizer total revenues", "Pfizer 10-K FY2025",    "Three largest U.S. wholesaler customers: McKesson 25%, Cencora 16%, Cardinal Health 13% of total revenues.", A + "78003/000007800326000026/pfe-20251231.htm"),
+    r("PFE", "COR", 16,   "share of Pfizer total revenues", "Pfizer 10-K FY2025",    "Three largest U.S. wholesaler customers: McKesson 25%, Cencora 16%, Cardinal Health 13% of total revenues.", A + "78003/000007800326000026/pfe-20251231.htm"),
+    r("PFE", "CAH", 13,   "share of Pfizer total revenues", "Pfizer 10-K FY2025",    "Three largest U.S. wholesaler customers: McKesson 25%, Cencora 16%, Cardinal Health 13% of total revenues.", A + "78003/000007800326000026/pfe-20251231.htm"),
+    r("JNJ", "MCK", null, "wholesalers unnamed in filing (21.8/15.5/11.1%)", "J&J 10-K FY2025", "Three wholesalers distributing products for both segments represented approximately 21.8%, 15.5% and 11.1% of gross revenues.", A + "200406/000020040626000016/jnj-20251228.htm", "J&J does not name its wholesalers; identity per industry convention"),
+    r("JNJ", "COR", null, "wholesalers unnamed in filing (21.8/15.5/11.1%)", "J&J 10-K FY2025", "Three wholesalers distributing products for both segments represented approximately 21.8%, 15.5% and 11.1% of gross revenues.", A + "200406/000020040626000016/jnj-20251228.htm", "J&J does not name its wholesalers; identity per industry convention"),
+    r("JNJ", "CAH", null, "wholesalers unnamed in filing (21.8/15.5/11.1%)", "J&J 10-K FY2025", "Three wholesalers distributing products for both segments represented approximately 21.8%, 15.5% and 11.1% of gross revenues.", A + "200406/000020040626000016/jnj-20251228.htm", "J&J does not name its wholesalers; identity per industry convention")
+  ];
+
+  var P = {
+    WMT: ["TGT", "COST", "AMZN"], TGT: ["WMT", "COST", "AMZN"], COST: ["WMT", "TGT"], AMZN: ["WMT", "MSFT", "GOOGL"],
+    AAPL: ["MSFT", "GOOGL", "SSNLF"], NVDA: ["AVGO", "MU", "TSM"], TSLA: ["F", "GM", "RIVN"], F: ["GM", "TSLA"], GM: ["F", "TSLA"],
+    XOM: ["CVX"], CVX: ["XOM"], BA: ["GE", "HWM"], CAT: ["DE"], DE: ["CAT"], KO: ["PEP", "MNST"], PEP: ["KO", "MNST"],
+    PG: ["CL", "KMB", "CLX", "CHD"], NKE: ["DKS"], HD: ["LOW"], LOW: ["HD"], MSFT: ["GOOGL", "AMZN", "META"],
+    META: ["GOOGL", "SNAP", "PINS"], GOOGL: ["META", "MSFT", "AAPL"], PFE: ["JNJ"], JNJ: ["PFE"]
+  };
+
+  return {
+    meta: { label: "seed dataset, sourced from public filings", generated: "2026-10-15", filingsReviewed: 60 },
+    entities: E,
+    rels: R,
+    peers: P
+  };
+})();
+
+</script>
+<script>
+/* ===== splc/splc.js ===== */
+/* FlowDeck — SPLC module (Agent E): company supply-chain graph.
+ * Public API on window.FD.splc:
+ *   mount(containerEl, { onEntity(entity), onPlot(entities) })
+ *   lookup(tickerOrName) -> Promise<graph>
+ *   graph() -> {root:{cik,ticker,name,hq}, suppliers:[rel], customers:[rel], peers:[entity]}
+ *   setProxy(base) / getProxy()   // localStorage "fd.splcProxy"
+ * Data: FD.splcSeed (seed.js) is the default path. Live EDGAR lookups run only when a
+ * CORS proxy base is configured (see README for why), except data.sec.gov submissions,
+ * which browsers can reach directly.
+ */
+(function () {
+  window.FD = window.FD || {};
+  var SEED = FD.splcSeed || { entities: {}, rels: [], peers: {}, meta: { label: "no seed loaded" } };
+  var LS_PROXY = "fd.splcProxy";
+  var UA_NOTE = "FlowDeck research patrickmoon7@gmail.com";
+  var SEC_TICKERS = "https://www.sec.gov/files/company_tickers.json";
+  var SEC_SUBMISSIONS = "https://data.sec.gov/submissions/CIK";
+  var SEC_EFTS = "https://efts.sec.gov/LATEST/search-index";
+
+  var state = {
+    el: null, opts: {}, root: null, graph: null, status: "",
+    liveTickers: null,      // [{ticker,name,cik}] when company_tickers.json was reachable
+    cache: {},              // ticker -> graph
+    acIndex: -1
+  };
+
+  /* ---------------- settings ---------------- */
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} }
+  function getProxy() { return (lsGet(LS_PROXY) || "").trim(); }
+  function setProxy(base) { lsSet(LS_PROXY, base && base.trim() ? base.trim() : null); }
+  function viaProxy(url) {
+    var p = getProxy();
+    if (!p) return null;
+    return p + (p.indexOf("?") >= 0 ? "&" : "?") + "url=" + encodeURIComponent(url);
+  }
+
+  /* ---------------- helpers ---------------- */
+  function h(tag, attrs, children) {
+    var el = document.createElement(tag);
+    if (attrs) for (var k in attrs) {
+      if (attrs[k] == null) continue;
+      if (k === "class") el.className = attrs[k];
+      else if (k === "text") el.textContent = attrs[k];
+      else if (k.slice(0, 2) === "on") el.addEventListener(k.slice(2), attrs[k]);
+      else el.setAttribute(k, attrs[k]);
+    }
+    (children || []).forEach(function (c) { if (c) el.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
+    return el;
+  }
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+  function esc(s) { return String(s == null ? "" : s); }
+  function padCik(cik) { var s = String(cik); while (s.length < 10) s = "0" + s; return s; }
+  function fetchJson(url, timeoutMs) {
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var t = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs || 8000) : null;
+    return fetch(url, { signal: ctrl ? ctrl.signal : undefined, headers: { "Accept": "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .finally(function () { if (t) clearTimeout(t); });
+  }
+
+  /* ---------------- resolution ---------------- */
+  function seedEntity(tk) { return SEED.entities[tk] || null; }
+  function seedTickerFor(nameOrTicker) {
+    var q = esc(nameOrTicker).trim().toUpperCase();
+    if (!q) return null;
+    if (SEED.entities[q]) return q;
+    var hit = null;
+    Object.keys(SEED.entities).forEach(function (tk) {
+      var n = SEED.entities[tk].name.toUpperCase();
+      if (!hit && (n === q || n.indexOf(q) === 0)) hit = tk;
+    });
+    return hit;
+  }
+  function searchIndex(q) {
+    q = esc(q).trim().toUpperCase();
+    if (!q) return [];
+    var out = [], seen = {};
+    var push = function (tk, name, src) { if (!seen[tk]) { seen[tk] = 1; out.push({ ticker: tk, name: name, src: src }); } };
+    Object.keys(SEED.entities).forEach(function (tk) {
+      var e = SEED.entities[tk];
+      if (tk.indexOf(q) === 0) push(tk, e.name, "seed");
+    });
+    Object.keys(SEED.entities).forEach(function (tk) {
+      var e = SEED.entities[tk];
+      if (e.name.toUpperCase().indexOf(q) >= 0) push(tk, e.name, "seed");
+    });
+    if (state.liveTickers) {
+      for (var i = 0; i < state.liveTickers.length && out.length < 12; i++) {
+        var t = state.liveTickers[i];
+        if (t.ticker.indexOf(q) === 0 || (q.length >= 3 && t.name.toUpperCase().indexOf(q) >= 0)) push(t.ticker, t.name, "edgar");
+      }
+    }
+    return out.slice(0, 12);
+  }
+  function loadLiveTickers() {
+    // www.sec.gov blocks browser UAs (403, no CORS); only try through a proxy.
+    var url = viaProxy(SEC_TICKERS);
+    if (!url || state.liveTickers) return Promise.resolve(state.liveTickers);
+    return fetchJson(url, 15000).then(function (j) {
+      var arr = Object.keys(j).map(function (k) { return { ticker: j[k].ticker, name: j[k].title, cik: j[k].cik_str }; });
+      state.liveTickers = arr;
+      setStatus("edgar ticker index loaded (" + arr.length + ")");
+      return arr;
+    }).catch(function (e) { setStatus("ticker index unavailable via proxy: " + e.message, true); return null; });
+  }
+
+  /* ---------------- graph building ---------------- */
+  function relToNode(rel, counterpartTk, role) {
+    var e = seedEntity(counterpartTk) || { cik: null, ticker: counterpartTk, name: counterpartTk, hq: null };
+    return {
+      cik: e.cik, ticker: e.ticker, name: e.name, role: role,
+      exposurePct: rel.pct == null ? null : rel.pct,
+      basis: rel.basis || "",
+      evidence: [{ source: rel.evidence.source, snippet: rel.evidence.snippet, url: rel.evidence.url }],
+      note: rel.note || null,
+      hq: e.hq || null,
+      inSeed: !!SEED.entities[counterpartTk]
+    };
+  }
+  function buildSeedGraph(tk) {
+    var root = seedEntity(tk);
+    if (!root) return null;
+    var suppliers = [], customers = [];
+    SEED.rels.forEach(function (rel) {
+      if (rel.to === tk) suppliers.push(relToNode(rel, rel.from, "supplier"));
+      if (rel.from === tk) customers.push(relToNode(rel, rel.to, "customer"));
+    });
+    var byPct = function (a, b) { return (b.exposurePct || 0) - (a.exposurePct || 0) || a.ticker.localeCompare(b.ticker); };
+    suppliers.sort(byPct); customers.sort(byPct);
+    var peers = (SEED.peers[tk] || []).map(function (p) { return seedEntity(p); }).filter(Boolean);
+    return { root: { cik: root.cik, ticker: root.ticker, name: root.name, hq: root.hq }, suppliers: suppliers, customers: customers, peers: peers, source: "seed" };
+  }
+  // Live: EDGAR full-text search for other filers' 10-Ks naming the root as a customer.
+  function liveAugment(graph) {
+    var p = getProxy();
+    if (!p || !graph) return Promise.resolve(graph);
+    var name = graph.root.name.replace(/[,.]?\s*(Inc|Corp|Co|Company|plc|Ltd)\.?$/i, "").trim();
+    var q = '"' + name + '" "accounted for" "net sales"';
+    var url = viaProxy(SEC_EFTS + "?q=" + encodeURIComponent(q) + "&forms=10-K&dateRange=custom&startdt=" + yearsAgo(2) + "&enddt=" + today());
+    setStatus("querying EDGAR full-text search via proxy…");
+    return fetchJson(url, 20000).then(function (j) {
+      var hits = (j.hits && j.hits.hits) || [];
+      var have = {}; graph.suppliers.forEach(function (s) { have[s.cik] = 1; });
+      have[graph.root.cik] = 1;
+      hits.forEach(function (hit) {
+        var s = hit._source || {};
+        var cik = parseInt((s.ciks || [])[0], 10);
+        if (!cik || have[cik]) return;
+        have[cik] = 1;
+        var dn = (s.display_names || [""])[0];
+        var m = /^(.*?)\s+\(([A-Z.\-]+)(?:,.*?)?\)\s+\(CIK/.exec(dn);
+        var acc = (s.adsh || "").replace(/-/g, "");
+        var doc = (hit._id || "").split(":")[1] || "";
+        graph.suppliers.push({
+          cik: cik, ticker: m ? m[2] : "", name: m ? m[1] : dn.split("  (")[0], role: "supplier",
+          exposurePct: null, basis: "10-K names " + graph.root.ticker + " near \"accounted for\" (unverified)",
+          evidence: [{ source: s.form + " " + s.file_date, snippet: "Full-text search hit; open filing to confirm percentage.", url: "https://www.sec.gov/Archives/edgar/data/" + cik + "/" + acc + "/" + doc }],
+          hq: null, inSeed: false, live: true
+        });
+      });
+      graph.source = "seed+edgar";
+      setStatus("seed + " + hits.length + " EDGAR full-text hits");
+      return graph;
+    }).catch(function (e) { setStatus("EDGAR search failed: " + e.message, true); return graph; });
+  }
+  function liveRoot(ticker) {
+    // Non-seed ticker: resolve via ticker index (needs proxy) then data.sec.gov (direct OK).
+    var t = (state.liveTickers || []).filter(function (x) { return x.ticker === ticker; })[0];
+    if (!t) return Promise.reject(new Error(ticker + " not in seed; add a proxy to resolve via EDGAR"));
+    var url = SEC_SUBMISSIONS + padCik(t.cik) + ".json";
+    return fetchJson(url, 10000).then(function (sub) {
+      var a = (sub.addresses && sub.addresses.business) || {};
+      return { root: { cik: t.cik, ticker: ticker, name: sub.name || t.name, hq: null, city: [a.city, a.stateOrCountry].filter(Boolean).join(", ") },
+               suppliers: [], customers: [], peers: [], source: "edgar" };
+    });
+  }
+  function today() { return new Date().toISOString().slice(0, 10); }
+  function yearsAgo(n) { var d = new Date(); d.setFullYear(d.getFullYear() - n); return d.toISOString().slice(0, 10); }
+
+  function lookup(q) {
+    var tk = seedTickerFor(q) || esc(q).trim().toUpperCase();
+    if (state.cache[tk]) { state.root = tk; state.graph = state.cache[tk]; render(); return Promise.resolve(state.graph); }
+    setStatus("loading " + tk + "…");
+    var g = buildSeedGraph(tk);
+    var p = g ? liveAugment(g) : loadLiveTickers().then(function () { return liveRoot(tk); }).then(liveAugment);
+    return p.then(function (graph) {
+      state.root = tk; state.graph = graph; state.cache[tk] = graph;
+      if (graph.source === "seed") setStatus(SEED.meta.label + " · " + graph.suppliers.length + " suppliers / " + graph.customers.length + " customers");
+      render();
+      return graph;
+    }).catch(function (e) { setStatus(e.message, true); return null; });
+  }
+
+  /* ---------------- rendering ---------------- */
+  function setStatus(msg, isErr) {
+    state.status = msg;
+    var el = state.el && state.el.querySelector(".fd-splc-status");
+    if (el) { el.textContent = msg; el.className = "fd-splc-status" + (isErr ? " err" : ""); }
+  }
+  function plottable(graph) {
+    var out = [], seen = {};
+    var add = function (n, role) { if (n && n.hq && !seen[n.ticker]) { seen[n.ticker] = 1; out.push({ cik: n.cik, ticker: n.ticker, name: n.name, role: role, hq: n.hq, exposurePct: n.exposurePct == null ? null : n.exposurePct }); } };
+    add(graph.root, "root"); graph.suppliers.forEach(function (s) { add(s, "supplier"); }); graph.customers.forEach(function (c) { add(c, "customer"); });
+    return out;
+  }
+  function rowEl(n, colRole) {
+    var pct = n.exposurePct;
+    var row = h("div", { class: "fd-splc-row" + (n.live ? " live" : ""), onclick: function (ev) {
+      if (ev.target.closest && ev.target.closest("a")) return;
+      if (ev.target.classList.contains("fd-splc-evtoggle")) { row.classList.toggle("open"); return; }
+      if (state.opts.onEntity) try { state.opts.onEntity(n); } catch (e) {}
+      if (n.inSeed || (state.liveTickers && n.ticker)) lookup(n.ticker); else row.classList.toggle("open");
+    } }, [
+      h("span", { class: "tk" + (n.inSeed ? "" : " nolink"), text: n.ticker || "—" }),
+      h("span", { class: "nm", title: n.name }, [n.name, h("div", { class: "basis", text: n.basis })]),
+      h("span", { class: "pct" + (pct == null ? " na" : ""), text: pct == null ? "n/a" : pct.toFixed(pct % 1 ? 1 : 0) + "%" }),
+      h("div", { class: "fd-splc-bar-wrap" }, [h("div", { class: "fd-splc-bar-fill", style: "width:" + Math.min(100, pct || 0) + "%" })]),
+      h("div", { class: "fd-splc-ev" }, [
+        h("q", { text: n.evidence[0].snippet }), " — ",
+        h("a", { href: n.evidence[0].url, target: "_blank", rel: "noopener", text: n.evidence[0].source }),
+        n.note ? h("div", { text: "note: " + n.note }) : null,
+        n.hq ? h("div", { text: "HQ " + n.hq.city }) : null
+      ])
+    ]);
+    row.querySelector(".pct").classList.add("fd-splc-evtoggle");
+    row.querySelector(".pct").title = "show evidence";
+    return row;
+  }
+  function colEl(title, role, list) {
+    var col = h("div", { class: "fd-splc-col " + (role === "supplier" ? "sup" : "cus") }, [
+      h("h3", {}, [title, h("span", { class: "cnt", text: list.length + (role === "supplier" ? " · % = supplier's sales to root" : " · % = root's sales to customer") })])
+    ]);
+    if (!list.length) col.appendChild(h("div", { class: "fd-splc-empty", text: "none in " + SEED.meta.label + (getProxy() ? "" : " — add a proxy for live EDGAR search") }));
+    list.forEach(function (n) { col.appendChild(rowEl(n, role)); });
+    return col;
+  }
+  function miniGraph(graph) {
+    var W = 640, PAD = 70, rowH = 22;
+    var sup = graph.suppliers.slice(0, 14), cus = graph.customers.slice(0, 14);
+    var rows = Math.max(sup.length, cus.length, 1);
+    var H = Math.max(120, rows * rowH + 40);
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "supply chain graph for " + graph.root.ticker });
+    var cx = W / 2, cy = H / 2, lx = PAD, rx = W - PAD;
+    var place = function (list, x, cls) {
+      var start = cy - ((list.length - 1) * rowH) / 2;
+      list.forEach(function (n, i) {
+        var y = start + i * rowH;
+        var c1 = cls === "sup" ? x + 60 : x - 60, c2 = cls === "sup" ? cx - 60 : cx + 60;
+        var e = svgEl("path", { class: "edge " + cls, d: "M" + x + "," + y + " C" + c1 + "," + y + " " + c2 + "," + cy + " " + cx + "," + cy });
+        if (n.exposurePct != null) e.setAttribute("stroke-width", String(1 + Math.min(4, n.exposurePct / 15)));
+        svg.appendChild(e);
+      });
+      list.forEach(function (n, i) {
+        var y = start + i * rowH;
+        var g = svgEl("g", { class: "node " + cls, transform: "translate(" + x + "," + y + ")" });
+        g.appendChild(svgEl("circle", { r: 4 }));
+        var t = svgEl("text", { x: cls === "sup" ? -8 : 8, y: 3, "text-anchor": cls === "sup" ? "end" : "start" });
+        t.textContent = (n.ticker || n.name.slice(0, 10)) + (n.exposurePct != null ? " " + n.exposurePct + "%" : "");
+        g.appendChild(t);
+        g.appendChild(svgEl("title", {})).textContent = n.name;
+        g.addEventListener("click", function () { if (n.inSeed) lookup(n.ticker); });
+        svg.appendChild(g);
+      });
+    };
+    place(sup, lx, "sup"); place(cus, rx, "cus");
+    var root = svgEl("g", { class: "node root", transform: "translate(" + cx + "," + cy + ")" });
+    root.appendChild(svgEl("circle", { r: 22 }));
+    var rt = svgEl("text", { "text-anchor": "middle", y: 4 }); rt.textContent = graph.root.ticker; root.appendChild(rt);
+    svg.appendChild(root);
+    var l1 = svgEl("text", { class: "lbl", x: lx, y: 12, "text-anchor": "start" }); l1.textContent = "SUPPLIERS"; svg.appendChild(l1);
+    var l2 = svgEl("text", { class: "lbl", x: rx, y: 12, "text-anchor": "end" }); l2.textContent = "CUSTOMERS"; svg.appendChild(l2);
+    if (graph.suppliers.length > sup.length || graph.customers.length > cus.length) {
+      var more = svgEl("text", { class: "lbl", x: cx, y: H - 6, "text-anchor": "middle" }); more.textContent = "showing top 14 per side"; svg.appendChild(more);
+    }
+    return h("div", { class: "fd-splc-graph" }, [svg]);
+  }
+  function render() {
+    var el = state.el; if (!el) return;
+    var body = el.querySelector(".fd-splc-body"); body.innerHTML = "";
+    var g = state.graph;
+    if (!g) { body.appendChild(h("div", { class: "fd-splc-empty", text: "Type a ticker (e.g. WMT, AAPL, NVDA) to load its supply chain." })); return; }
+    var plot = plottable(g);
+    var rootCard = h("div", { class: "fd-splc-root" }, [
+      h("span", { class: "tk", text: g.root.ticker }),
+      h("span", { class: "nm", text: g.root.name }),
+      h("div", { class: "meta" }, [
+        h("span", {}, ["CIK ", h("b", { text: g.root.cik == null ? "—" : padCik(g.root.cik) })]),
+        h("span", {}, ["HQ ", h("b", { text: g.root.hq ? g.root.hq.city : (g.root.city || "—") })]),
+        h("span", {}, ["SRC ", h("b", { text: g.source })])
+      ]),
+      h("div", { class: "actions" }, [
+        h("button", { class: "fd-splc-primary", text: "PLOT " + plot.length, disabled: plot.length ? null : "disabled", onclick: function () { if (state.opts.onPlot) try { state.opts.onPlot(plot); } catch (e) {} } }),
+        h("a", { href: g.root.cik ? "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=" + padCik(g.root.cik) + "&type=10-K" : "#", target: "_blank", rel: "noopener" }, [h("button", { text: "EDGAR" })])
+      ]),
+      g.peers && g.peers.length ? h("div", { class: "fd-splc-peers" }, ["PEERS "].concat(g.peers.map(function (p) { return h("a", { text: p.ticker, onclick: function () { lookup(p.ticker); } }); }))) : null
+    ]);
+    body.appendChild(rootCard);
+    body.appendChild(miniGraph(g));
+    body.appendChild(h("div", { class: "fd-splc-cols" }, [colEl("SUPPLIERS", "supplier", g.suppliers), colEl("CUSTOMERS", "customer", g.customers)]));
+    body.appendChild(h("div", { class: "fd-splc-foot", text: SEED.meta.label + " · generated " + SEED.meta.generated + " · " + SEED.rels.length + " relationships / " + Object.keys(SEED.entities).length + " entities · click a row to re-root, click % for evidence" }));
+    var inp = el.querySelector("input"); if (inp && document.activeElement !== inp) inp.value = g.root.ticker;
+  }
+
+  /* ---------------- autocomplete ---------------- */
+  function bindSearch(el) {
+    var inp = el.querySelector("input"), ac = el.querySelector(".fd-splc-ac");
+    var items = [];
+    var close = function () { ac.classList.remove("open"); state.acIndex = -1; };
+    var open = function () {
+      items = searchIndex(inp.value); ac.innerHTML = "";
+      if (!items.length) return close();
+      items.forEach(function (it, i) {
+        ac.appendChild(h("div", { class: "fd-splc-ac-item" + (i === state.acIndex ? " active" : ""), onmousedown: function (ev) { ev.preventDefault(); inp.value = it.ticker; close(); lookup(it.ticker); } }, [
+          h("span", { class: "t", text: it.ticker }), h("span", { class: "n", text: it.name }), h("span", { class: "s", text: it.src })
+        ]));
+      });
+      ac.classList.add("open");
+    };
+    inp.addEventListener("input", function () { state.acIndex = -1; open(); });
+    inp.addEventListener("focus", open);
+    inp.addEventListener("blur", function () { setTimeout(close, 120); });
+    inp.addEventListener("keydown", function (ev) {
+      if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        ev.preventDefault(); if (!items.length) return;
+        state.acIndex = (state.acIndex + (ev.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; open();
+      } else if (ev.key === "Enter") {
+        ev.preventDefault();
+        var pick = state.acIndex >= 0 && items[state.acIndex] ? items[state.acIndex].ticker : inp.value;
+        close(); if (pick.trim()) lookup(pick);
+      } else if (ev.key === "Escape") { close(); inp.blur(); }
+    });
+  }
+
+  /* ---------------- mount ---------------- */
+  function mount(containerEl, opts) {
+    state.el = containerEl; state.opts = opts || {};
+    containerEl.classList.add("fd-splc");
+    containerEl.innerHTML = "";
+    var bar = h("div", { class: "fd-splc-bar" }, [
+      h("span", { class: "fd-splc-tag", text: "SPLC" }),
+      h("div", { class: "fd-splc-search" }, [
+        h("input", { type: "text", placeholder: "ticker or company name…", autocomplete: "off", spellcheck: "false", "aria-label": "SPLC search" }),
+        h("div", { class: "fd-splc-ac" })
+      ]),
+      h("button", { text: "GO", onclick: function () { var v = containerEl.querySelector("input").value; if (v.trim()) lookup(v); } }),
+      h("button", { text: getProxy() ? "PROXY ✓" : "PROXY", title: "Set a CORS proxy base for live EDGAR lookups (stored in localStorage fd.splcProxy)", onclick: function () {
+        var v = window.prompt("CORS proxy base URL for EDGAR (blank to clear). Proxy must forward ?url=… with User-Agent \"" + UA_NOTE + "\".", getProxy());
+        if (v === null) return; setProxy(v); state.liveTickers = null; state.cache = {};
+        this.textContent = getProxy() ? "PROXY ✓" : "PROXY"; setStatus(getProxy() ? "proxy set: " + getProxy() : "proxy cleared — seed dataset only");
+        loadLiveTickers();
+      } }),
+      h("div", { class: "fd-splc-status", text: SEED.meta.label + " · " + Object.keys(SEED.entities).length + " entities" })
+    ]);
+    containerEl.appendChild(bar);
+    containerEl.appendChild(h("div", { class: "fd-splc-body" }));
+    bindSearch(containerEl);
+    render();
+    if (getProxy()) loadLiveTickers();
+    return FD.splc;
+  }
+
+  FD.splc = {
+    mount: mount, lookup: lookup,
+    graph: function () { return state.graph; },
+    setProxy: setProxy, getProxy: getProxy,
+    search: searchIndex,
+    seed: SEED
+  };
+})();
+
+</script>
+<script>
+/* ===== map/map.js ===== */
+/* FlowDeck — map module (FD.map)
+ * Leaflet 1.9.x, CARTO dark tiles, canvas-rendered vessel markers.
+ * Public API (see README.md):
+ *   FD.map.mount(containerEl, { onSelect })
+ *   FD.map.setVessels(Map|Array)   FD.map.upsertVessel(v)   FD.map.removeVessel(mmsi)
+ *   FD.map.setChokePoints(list)    FD.map.setFilter({types, laden, minSog})
+ *   FD.map.flyTo(presetId)         FD.map.focusVessel(mmsi)   FD.map.select(mmsi|null)
+ *   FD.map.presets                 FD.map.getMap()            FD.map.destroy()
+ *   FD.map.setBasemap('carto'|'esri', cartoKey?)  mount opts: { onSelect, basemap, cartoKey }
+ */
+(function () {
+  'use strict';
+  window.FD = window.FD || {};
+
+  // ---------------------------------------------------------------- presets
+  var PRESETS = [
+    { id: 'world',      label: 'WORLD',   bounds: null },
+    { id: 'gulf',       label: 'GULF',    bounds: [[23.0, 47.0], [30.5, 57.5]] },
+    { id: 'hormuz',     label: 'HORMUZ',  bounds: [[24.3, 54.5], [27.6, 58.2]] },
+    { id: 'malacca',    label: 'MALACCA', bounds: [[-1.5, 97.5], [7.0, 105.5]] },
+    { id: 'suez',       label: 'SUEZ',    bounds: [[26.5, 30.0], [32.5, 35.5]] },
+    { id: 'usgulf',     label: 'US GULF', bounds: [[24.0, -98.5], [31.0, -81.5]] },
+    { id: 'northsea',   label: 'N.SEA',   bounds: [[50.0, -4.5], [62.5, 9.5]] },
+    { id: 'blacksea',   label: 'BLACK',   bounds: [[40.0, 27.0], [47.5, 42.0]] },
+    { id: 'westafrica', label: 'W.AFR',   bounds: [[-7.0, -3.0], [8.5, 12.5]] },
+    { id: 'caribbean',  label: 'CARIB',   bounds: [[8.0, -90.0], [23.5, -58.0]] }
+  ];
+  var WORLD_CENTER = [22, 20], WORLD_ZOOM = 2;
+
+  // ---------------------------------------------------------------- state
+  var map = null, container = null, opts = {};
+  var renderer = null, chokeRenderer = null, vesselLayer = null, chokeLayer = null, fxLayer = null;
+  var markers = new Map();        // mmsi -> L.CircleMarker (marker._fdv = vessel)
+  var filter = { types: null, laden: 'all', minSog: 0 };
+  var selectedMmsi = null, ring = null, selTick = null, zoomTicks = null;
+  var ui = { presets: null, legend: null, count: null };
+  var colors = null, activePreset = 'world';
+  var resizeTimer = null, ro = null, onWinResize = null;
+  var shownCount = 0, baseLayer = null, baseFellBack = false;
+
+  // ---------------------------------------------------------------- helpers
+  function cssVar(name, fallback) {
+    try {
+      var v = getComputedStyle(container || document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch (e) { return fallback; }
+  }
+  function loadColors() {
+    colors = {
+      tankerLaden:   cssVar('--fd-v-tanker-laden', '#f5a623'),
+      tankerBallast: cssVar('--fd-v-tanker-ballast', '#f5a623'),
+      cargo:         cssVar('--fd-v-cargo', '#6b7a8f'),
+      gas:           cssVar('--fd-v-gas', '#2dd4bf'),
+      other:         cssVar('--fd-v-other', '#555555'),
+      select:        cssVar('--fd-v-select', '#ffffff'),
+      choke:         cssVar('--fd-choke', '#f5a623')
+    };
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function category(v) {
+    var t = (v.typeLabel || '').toLowerCase();
+    if (t.indexOf('gas') >= 0 || t.indexOf('lng') >= 0 || t.indexOf('lpg') >= 0) return 'gas';
+    if (t.indexOf('tanker') >= 0) return 'tanker';
+    if (t.indexOf('cargo') >= 0) return 'cargo';
+    var st = +v.shipType;
+    if (st >= 80 && st <= 89) return 'tanker';
+    if (st >= 70 && st <= 79) return 'cargo';
+    return 'other';
+  }
+  function styleFor(v) {
+    var cat = category(v);
+    switch (cat) {
+      case 'tanker':
+        if (v.laden === true)  return { radius: 3.5, color: colors.tankerLaden, weight: 1, opacity: 1, fillColor: colors.tankerLaden, fillOpacity: 0.95 };
+        if (v.laden === false) return { radius: 3.5, color: colors.tankerBallast, weight: 1, opacity: 0.85, fillColor: colors.tankerBallast, fillOpacity: 0.12 };
+        return { radius: 3.5, color: colors.tankerLaden, weight: 1, opacity: 0.9, fillColor: colors.tankerLaden, fillOpacity: 0.45 };
+      case 'cargo': return { radius: 3, color: colors.cargo, weight: 1, opacity: 0.9, fillColor: colors.cargo, fillOpacity: 0.8 };
+      case 'gas':   return { radius: 3.5, color: colors.gas, weight: 1, opacity: 1, fillColor: colors.gas, fillOpacity: 0.9 };
+      default:      return { radius: 3, color: colors.other, weight: 1, opacity: 0.9, fillColor: colors.other, fillOpacity: 0.7 };
+    }
+  }
+  function matches(v) {
+    if (filter.types && filter.types.length && filter.types.indexOf(category(v)) < 0) return false;
+    if (filter.laden === 'laden'   && v.laden !== true)  return false;
+    if (filter.laden === 'ballast' && v.laden !== false) return false;
+    if (filter.minSog > 0 && !((+v.sog || 0) >= filter.minSog)) return false;
+    return true;
+  }
+  function tooltipHtml(v) {
+    var ladenTxt = v.laden === true ? '<span class="l">LADEN</span>' : v.laden === false ? '<span class="b">BALLAST</span>' : '';
+    var sog = v.sog == null ? '—' : (+v.sog).toFixed(1) + ' kn';
+    return '<div class="n">' + esc(v.name || ('MMSI ' + v.mmsi)) + '</div>' +
+      '<div><span class="m">' + esc(v.typeLabel || category(v)) + '</span>' + (ladenTxt ? ' · ' + ladenTxt : '') + ' · ' + sog + '</div>' +
+      '<div class="m">→ ' + esc(v.destination || 'n/a') + (v.chokePoint ? ' · ' + esc(v.chokePoint) : '') + '</div>';
+  }
+  function validPos(v) {
+    return v && isFinite(+v.lat) && isFinite(+v.lon) && Math.abs(+v.lat) <= 90 && Math.abs(+v.lon) <= 180;
+  }
+  // end point of a short line of `px` pixels from latlng in bearing `deg` (0 = north)
+  function tickEnd(latlng, deg, px) {
+    var p = map.latLngToLayerPoint(latlng);
+    var r = (deg || 0) * Math.PI / 180;
+    return map.layerPointToLatLng(L.point(p.x + Math.sin(r) * px, p.y - Math.cos(r) * px));
+  }
+
+  // ---------------------------------------------------------------- markers
+  function createMarker(v) {
+    var m = L.circleMarker([+v.lat, +v.lon], L.extend({ renderer: renderer, interactive: true, bubblingMouseEvents: false }, styleFor(v)));
+    m._fdv = v;
+    m.bindTooltip(function () { return tooltipHtml(m._fdv); }, { className: 'fd-tip', direction: 'top', offset: [0, -6], opacity: 1 });
+    m.on('click', function (e) { if (e && e.originalEvent) L.DomEvent.stop(e.originalEvent); select(m._fdv.mmsi, false); });
+    return m;
+  }
+  function applyVisibility(m) {
+    var show = matches(m._fdv);
+    var on = vesselLayer.hasLayer(m);
+    if (show && !on) vesselLayer.addLayer(m);
+    else if (!show && on) vesselLayer.removeLayer(m);
+    return show;
+  }
+  function updateMarker(m, v) {
+    var old = m._fdv;
+    m._fdv = v;
+    var lat = +v.lat, lon = +v.lon;
+    if (old.lat !== lat || old.lon !== lon) m.setLatLng([lat, lon]);
+    if (old.laden !== v.laden || old.typeLabel !== v.typeLabel || old.shipType !== v.shipType) m.setStyle(styleFor(v));
+    return applyVisibility(m);
+  }
+  function upsertVessel(v) {
+    if (!map || !validPos(v) || v.mmsi == null) return;
+    var key = String(v.mmsi);
+    var m = markers.get(key);
+    var wasShown, nowShown;
+    if (m) {
+      wasShown = vesselLayer.hasLayer(m);
+      nowShown = updateMarker(m, v);
+    } else {
+      m = createMarker(v);
+      markers.set(key, m);
+      wasShown = false;
+      nowShown = applyVisibility(m);
+    }
+    shownCount += (nowShown ? 1 : 0) - (wasShown ? 1 : 0);
+    if (selectedMmsi === key) drawSelection();
+    scheduleCount();
+  }
+  function removeVessel(mmsi) {
+    var key = String(mmsi), m = markers.get(key);
+    if (!m) return;
+    if (vesselLayer.hasLayer(m)) { vesselLayer.removeLayer(m); shownCount--; }
+    markers.delete(key);
+    if (selectedMmsi === key) select(null);
+    scheduleCount();
+  }
+  function setVessels(src) {
+    if (!map) return;
+    var list = src instanceof Map ? Array.from(src.values()) : Array.isArray(src) ? src : (src && typeof src.values === 'function' ? Array.from(src.values()) : []);
+    var seen = new Set();
+    shownCount = 0;
+    for (var i = 0; i < list.length; i++) {
+      var v = list[i];
+      if (!validPos(v) || v.mmsi == null) continue;
+      var key = String(v.mmsi);
+      seen.add(key);
+      var m = markers.get(key);
+      if (m) { if (updateMarker(m, v)) shownCount++; }
+      else { m = createMarker(v); markers.set(key, m); if (applyVisibility(m)) shownCount++; }
+    }
+    markers.forEach(function (m, key) {
+      if (!seen.has(key)) { vesselLayer.removeLayer(m); markers.delete(key); }
+    });
+    if (selectedMmsi && !markers.has(selectedMmsi)) select(null);
+    else if (selectedMmsi) drawSelection();
+    refreshZoomTicks();
+    updateCount();
+  }
+  function setFilter(f) {
+    f = f || {};
+    if ('types' in f) {
+      var t = f.types;
+      filter.types = (t && t.length) ? t.map(function (x) { return String(x).toLowerCase(); }) : null;
+    }
+    if ('laden' in f) filter.laden = f.laden || 'all';
+    if ('minSog' in f) filter.minSog = +f.minSog || 0;
+    if (!map) return;
+    shownCount = 0;
+    markers.forEach(function (m) { if (applyVisibility(m)) shownCount++; });
+    if (selectedMmsi) { var sm = markers.get(selectedMmsi); if (sm && !vesselLayer.hasLayer(sm)) select(null); }
+    refreshZoomTicks();
+    updateCount();
+  }
+
+  // ---------------------------------------------------------------- selection
+  function select(mmsi, pan) {
+    var key = mmsi == null ? null : String(mmsi);
+    var m = key ? markers.get(key) : null;
+    selectedMmsi = m ? key : null;
+    drawSelection();
+    if (m && pan) map.panTo(m.getLatLng());
+    if (typeof opts.onSelect === 'function') {
+      try { opts.onSelect(m ? m._fdv : null); } catch (e) { console.error('[FD.map] onSelect threw', e); }
+    }
+  }
+  function drawSelection() {
+    if (!map) return;
+    var m = selectedMmsi ? markers.get(selectedMmsi) : null;
+    if (!m) {
+      if (ring) { fxLayer.removeLayer(ring); ring = null; }
+      if (selTick) { fxLayer.removeLayer(selTick); selTick = null; }
+      return;
+    }
+    var ll = m.getLatLng(), v = m._fdv;
+    if (!ring) {
+      ring = L.circleMarker(ll, { renderer: renderer, radius: 9, color: colors.select, weight: 1.5, opacity: 0.95, fill: false, interactive: false }).addTo(fxLayer);
+    } else ring.setLatLng(ll);
+    var cog = v.cog != null ? +v.cog : (v.heading != null ? +v.heading : null);
+    if (cog != null && isFinite(cog)) {
+      var pts = [ll, tickEnd(ll, cog, 16)];
+      if (!selTick) selTick = L.polyline(pts, { renderer: renderer, color: colors.select, weight: 1, opacity: 0.9, interactive: false }).addTo(fxLayer);
+      else selTick.setLatLngs(pts);
+    } else if (selTick) { fxLayer.removeLayer(selTick); selTick = null; }
+  }
+  // heading ticks for all visible vessels when zoomed in (single multi-polyline, cheap)
+  function refreshZoomTicks() {
+    if (!map) return;
+    if (map.getZoom() < 8) {
+      if (zoomTicks) { fxLayer.removeLayer(zoomTicks); zoomTicks = null; }
+      return;
+    }
+    var b = map.getBounds().pad(0.1), segs = [];
+    markers.forEach(function (m) {
+      if (!vesselLayer.hasLayer(m)) return;
+      var ll = m.getLatLng();
+      if (!b.contains(ll)) return;
+      var v = m._fdv, cog = v.cog != null ? +v.cog : (v.heading != null ? +v.heading : NaN);
+      if (!isFinite(cog) || !((+v.sog || 0) > 0.5)) return;
+      segs.push([ll, tickEnd(ll, cog, 9)]);
+      if (segs.length > 4000) return;
+    });
+    if (!zoomTicks) zoomTicks = L.polyline(segs, { renderer: renderer, color: '#c9d1d9', weight: 1, opacity: 0.55, interactive: false }).addTo(fxLayer);
+    else zoomTicks.setLatLngs(segs);
+  }
+  function focusVessel(mmsi) {
+    var m = markers.get(String(mmsi));
+    if (!m || !map) return false;
+    if (!vesselLayer.hasLayer(m)) { // un-hide if filtered out so the user can see it
+      vesselLayer.addLayer(m); shownCount++; updateCount();
+    }
+    setActivePreset(null);
+    map.flyTo(m.getLatLng(), Math.max(map.getZoom(), 8), { duration: 0.9 });
+    select(m._fdv.mmsi, false);
+    return true;
+  }
+
+  // ---------------------------------------------------------------- choke points
+  function setChokePoints(list) {
+    if (!map) return;
+    chokeLayer.clearLayers();
+    (list || []).forEach(function (cp) {
+      if (!cp || !cp.polygon || cp.polygon.length < 3) return;
+      var poly = L.polygon(cp.polygon, { renderer: chokeRenderer, pane: 'fd-choke', color: colors.choke, weight: 1, opacity: 0.8, fillColor: colors.choke, fillOpacity: 0.25, interactive: false });
+      chokeLayer.addLayer(poly);
+      var center = cp.center || poly.getBounds().getCenter();
+      var n = cp.tankerCount != null ? cp.tankerCount : (cp.count != null ? cp.count : 0);
+      var icon = L.divIcon({ className: 'fd-choke-badge', iconSize: [0, 0], html: '<span>' + esc(cp.name || cp.id) + ' · <span class="cnt">' + n + '</span> tankers</span>' });
+      chokeLayer.addLayer(L.marker(center, { icon: icon, interactive: false, keyboard: false, pane: 'fd-choke' }));
+    });
+  }
+
+  // ---------------------------------------------------------------- basemap
+  // CARTO dark_all is the intended look but basemaps.cartocdn.com now watermarks tiles
+  // ("API KEY REQUIRED") unless ?key= is supplied (free tier: carto.com/basemaps/apikey).
+  // Esri's Dark Gray Canvas needs no key and is used when no CARTO key is given.
+  var BASEMAPS = {
+    carto: function (key) {
+      return L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' + (key ? '?key=' + encodeURIComponent(key) : ''), {
+        subdomains: 'abcd', maxZoom: 12, maxNativeZoom: 12, crossOrigin: true,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+      });
+    },
+    esri: function () {
+      return L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 12, maxNativeZoom: 12,
+        attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
+      });
+    }
+  };
+  function setBasemap(id, key) {
+    if (!map) return false;
+    var make = BASEMAPS[id] || BASEMAPS.esri;
+    if (baseLayer) { map.removeLayer(baseLayer); baseLayer = null; }
+    baseLayer = make(key).addTo(map);
+    baseLayer.on('tileerror', function () { // e.g. CARTO blocked -> fall back once
+      if (id === 'carto' && !baseFellBack) { baseFellBack = true; setBasemap('esri'); }
+    });
+    return true;
+  }
+
+  // ---------------------------------------------------------------- navigation
+  function flyTo(presetId) {
+    if (!map) return false;
+    var p = null;
+    for (var i = 0; i < PRESETS.length; i++) if (PRESETS[i].id === presetId) p = PRESETS[i];
+    if (!p) { console.warn('[FD.map] unknown preset', presetId); return false; }
+    setActivePreset(p.id);
+    if (!p.bounds) map.flyTo(WORLD_CENTER, WORLD_ZOOM, { duration: 0.9 });
+    else map.flyToBounds(p.bounds, { padding: [20, 20], maxZoom: 12, duration: 0.9 });
+    return true;
+  }
+  function setActivePreset(id) {
+    activePreset = id;
+    if (!ui.presets) return;
+    var btns = ui.presets.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', btns[i].dataset.preset === id);
+  }
+
+  // ---------------------------------------------------------------- overlays
+  function buildUI() {
+    var strip = L.DomUtil.create('div', 'fd-map-ui fd-presets', container);
+    PRESETS.forEach(function (p) {
+      var b = L.DomUtil.create('button', '', strip);
+      b.type = 'button'; b.textContent = p.label; b.dataset.preset = p.id; b.title = 'GO ' + p.id.toUpperCase();
+      L.DomEvent.on(b, 'click', function (e) { L.DomEvent.stop(e); flyTo(p.id); });
+    });
+    L.DomEvent.disableClickPropagation(strip);
+    L.DomEvent.disableScrollPropagation(strip);
+    ui.presets = strip;
+
+    var legend = L.DomUtil.create('div', 'fd-map-ui fd-legend', container);
+    legend.innerHTML =
+      '<span class="sw fill c-tl"></span><span class="lbl">TANKER LADEN</span>' +
+      '<span class="sw c-tb"></span><span class="lbl">TANKER BALLAST</span>' +
+      '<span class="sw fill c-cg"></span><span class="lbl">CARGO</span>' +
+      '<span class="sw fill c-gs"></span><span class="lbl">LNG / LPG</span>' +
+      '<span class="sw fill c-ot"></span><span class="lbl">OTHER</span>' +
+      '<span class="sw poly c-ck"></span><span class="lbl">CHOKE POINT</span>' +
+      '<span class="count"><b>0</b> shown / 0</span>';
+    L.DomEvent.disableClickPropagation(legend);
+    ui.legend = legend;
+    ui.count = legend.querySelector('.count');
+    setActivePreset('world');
+  }
+  var countTimer = null;
+  function scheduleCount() { if (!countTimer) countTimer = setTimeout(function () { countTimer = null; updateCount(); }, 200); }
+  function updateCount() {
+    if (ui.count) ui.count.innerHTML = '<b>' + shownCount + '</b> shown / ' + markers.size;
+  }
+
+  // ---------------------------------------------------------------- mount / destroy
+  function mount(el, options) {
+    if (!el) throw new Error('[FD.map] mount: container element required');
+    if (typeof L === 'undefined') throw new Error('[FD.map] Leaflet (L) not loaded');
+    if (map) destroy();
+    container = el; opts = options || {};
+    L.DomUtil.addClass(container, 'fd-map');
+    loadColors();
+
+    map = L.map(container, {
+      center: WORLD_CENTER, zoom: WORLD_ZOOM, minZoom: 2, maxZoom: 12,
+      worldCopyJump: true, zoomControl: true, attributionControl: true,
+      preferCanvas: true, zoomSnap: 0.5, wheelPxPerZoomLevel: 90,
+      maxBounds: [[-85, -Infinity], [85, Infinity]], maxBoundsViscosity: 0.5
+    });
+    setBasemap(opts.basemap || (opts.cartoKey ? 'carto' : 'esri'), opts.cartoKey);
+
+    // choke-point polygons live on a lower pane with their own canvas so they never sit
+    // above the vessel canvas and steal pointer events
+    map.createPane('fd-choke').style.zIndex = 350;
+    chokeRenderer = L.canvas({ pane: 'fd-choke', padding: 0.5 });
+    chokeRenderer.addTo(map);
+    renderer = L.canvas({ padding: 0.5, tolerance: 4 });
+    renderer.addTo(map);
+    chokeLayer = L.layerGroup().addTo(map);
+    vesselLayer = L.layerGroup().addTo(map);
+    fxLayer = L.layerGroup().addTo(map);
+
+    map.on('zoomend', function () { drawSelection(); refreshZoomTicks(); });
+    map.on('moveend', refreshZoomTicks);
+    map.on('movestart', function () { if (activePreset) setActivePreset(null); });
+    map.on('click', function () { if (selectedMmsi) select(null); });
+
+    buildUI();
+
+    // keep Leaflet's size in sync with the container (phones rotating, panels resizing)
+    onWinResize = function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () { if (map) map.invalidateSize({ pan: false }); }, 120);
+    };
+    window.addEventListener('resize', onWinResize);
+    window.addEventListener('orientationchange', onWinResize);
+    if (typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(onWinResize); ro.observe(container); }
+    setTimeout(function () { if (map) map.invalidateSize(); }, 0);
+    return FDmap;
+  }
+  function destroy() {
+    if (!map) return;
+    window.removeEventListener('resize', onWinResize);
+    window.removeEventListener('orientationchange', onWinResize);
+    if (ro) { ro.disconnect(); ro = null; }
+    map.remove(); map = null; baseLayer = null; baseFellBack = false;
+    markers.clear(); shownCount = 0; selectedMmsi = null; ring = null; selTick = null; zoomTicks = null;
+    if (ui.presets && ui.presets.parentNode) ui.presets.parentNode.removeChild(ui.presets);
+    if (ui.legend && ui.legend.parentNode) ui.legend.parentNode.removeChild(ui.legend);
+    ui = { presets: null, legend: null, count: null };
+    if (container) L.DomUtil.removeClass(container, 'fd-map');
+    container = null;
+  }
+
+  // ---------------------------------------------------------------- export
+  var FDmap = {
+    mount: mount,
+    destroy: destroy,
+    setVessels: setVessels,
+    upsertVessel: upsertVessel,
+    removeVessel: removeVessel,
+    setChokePoints: setChokePoints,
+    setFilter: setFilter,
+    flyTo: flyTo,
+    focusVessel: focusVessel,
+    select: function (mmsi) { select(mmsi, true); },
+    invalidateSize: function () { if (map) map.invalidateSize(); },
+    setBasemap: setBasemap,                 // 'carto' (needs key) | 'esri'
+    getMap: function () { return map; },
+    getFilter: function () { return { types: filter.types ? filter.types.slice() : null, laden: filter.laden, minSog: filter.minSog }; },
+    presets: PRESETS.map(function (p) { return { id: p.id, label: p.label }; }),
+    stats: function () { return { total: markers.size, shown: shownCount, selected: selectedMmsi }; }
+  };
+  window.FD.map = FDmap;
+})();
+
+</script>
+<script>
+/* ===== markets/markets.js ===== */
+/* FlowDeck — markets module (Agent C)
+ * Attaches window.FD.markets = { mount, unmount, refresh, watchlist, setKeys, getKeys, symbols, state }
+ * Pure browser JS, no deps. Client-only; all sources are public + CORS-reachable (see README.md).
+ */
+(function () {
+  'use strict';
+  window.FD = window.FD || {};
+
+  // ---------------------------------------------------------------- config
+  var REFRESH_MS = 60000;             // prices
+  var NEWS_MIN_MS = 270000;           // feeds refetched at most every ~4.5 min (rss2json rate-limits)
+  var FETCH_TIMEOUT_MS = 8000;        // direct calls
+  var PROXY_TIMEOUT_MS = 25000;       // CORS passthroughs are slow (10-20s observed)
+  var LS_WATCH = 'fd.watchlist';
+  var LS_KEYS = 'fd.keys';
+  var LS_CACHE = 'fd.markets.cache';   // last good quotes/news, painted instantly on load
+  // CORS passthrough proxies (Yahoo/Stooq send no ACAO header). allorigins echoes the Origin header,
+  // so it works from any http(s) origin but NOT from file:// — serve test.html over http.
+  var PROXIES = [
+    function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); },
+    function (u) { return 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u); }
+  ];
+
+  // Symbol table: canonical id -> per-source tickers
+  var SYMBOLS = [
+    { id: 'BRENT', label: 'Brent', kind: 'cmdty', yahoo: 'BZ=F', stooq: 'br.f', eia: 'RBRTE', unit: '$/bbl' },
+    { id: 'WTI',   label: 'WTI',   kind: 'cmdty', yahoo: 'CL=F', stooq: 'cl.f', eia: 'RWTC',  unit: '$/bbl' },
+    { id: 'NG',    label: 'Henry Hub', kind: 'cmdty', yahoo: 'NG=F', stooq: 'ng.f', unit: '$/MMBtu' },
+    { id: 'FRO',  label: 'Frontline',      kind: 'tanker', yahoo: 'FRO',  stooq: 'fro.us' },
+    { id: 'STNG', label: 'Scorpio Tankers', kind: 'tanker', yahoo: 'STNG', stooq: 'stng.us' },
+    { id: 'TNK',  label: 'Teekay Tankers', kind: 'tanker', yahoo: 'TNK',  stooq: 'tnk.us' },
+    { id: 'DHT',  label: 'DHT Holdings',   kind: 'tanker', yahoo: 'DHT',  stooq: 'dht.us' },
+    { id: 'INSW', label: 'Intl Seaways',   kind: 'tanker', yahoo: 'INSW', stooq: 'insw.us' },
+    { id: 'NAT',  label: 'Nordic American', kind: 'tanker', yahoo: 'NAT', stooq: 'nat.us' },
+    { id: 'XOM',  label: 'ExxonMobil', kind: 'major', yahoo: 'XOM',  stooq: 'xom.us' },
+    { id: 'CVX',  label: 'Chevron',    kind: 'major', yahoo: 'CVX',  stooq: 'cvx.us' },
+    { id: 'SHEL', label: 'Shell',      kind: 'major', yahoo: 'SHEL', stooq: 'shel.us' },
+    { id: 'BP',   label: 'BP',         kind: 'major', yahoo: 'BP',   stooq: 'bp.us' }
+  ];
+  var FEEDS = [
+    { name: 'OilPrice', url: 'https://oilprice.com/rss/main' },
+    { name: 'gCaptain', url: 'https://gcaptain.com/feed/' },
+    { name: 'EIA', url: 'https://www.eia.gov/rss/todayinenergy.xml' }
+  ];
+
+  // ---------------------------------------------------------------- state
+  var state = {
+    quotes: {},          // id -> {price, chg, pct, hist:[], src, t}
+    news: [],            // [{title, link, source, date}]
+    stamps: { prices: null, news: null, watch: null },
+    errors: { prices: null, news: null },
+    keys: {}
+  };
+  var root = null, els = {}, timer = null, inflight = null, pending = false;
+
+  // ---------------------------------------------------------------- utils
+  function safeGet(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+  function safeSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  function utcStamp(d) { return (d || new Date()).toISOString().slice(11, 19) + ' UTC'; }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function fmt(n, hint) {
+    if (n == null || isNaN(n)) return '—';
+    var d = hint != null ? hint : (Math.abs(n) < 10 ? 3 : 2);
+    return Number(n).toFixed(d);
+  }
+  function signed(n, d, suffix) { if (n == null || isNaN(n)) return '—'; return (n > 0 ? '+' : '') + Number(n).toFixed(d) + (suffix || ''); }
+  function relTime(ts) {
+    var s = Math.max(0, (Date.now() - ts) / 1000);
+    if (s < 60) return 'now'; if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h'; return Math.floor(s / 86400) + 'd';
+  }
+  function findSym(id) {
+    id = String(id || '').toUpperCase();
+    for (var i = 0; i < SYMBOLS.length; i++) if (SYMBOLS[i].id === id || SYMBOLS[i].yahoo === id) return SYMBOLS[i];
+    return null;
+  }
+  function symFor(id) { // unknown tickers become ad-hoc equities on Yahoo
+    return findSym(id) || { id: id.toUpperCase(), label: id.toUpperCase(), kind: 'custom', yahoo: id.toUpperCase(), stooq: id.toLowerCase() + '.us' };
+  }
+
+  function fetchT(url, opts, ms) {
+    var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var t = setTimeout(function () { if (ctl) ctl.abort(); }, ms || FETCH_TIMEOUT_MS);
+    opts = opts || {}; if (ctl) opts.signal = ctl.signal;
+    return fetch(url, opts).then(function (r) {
+      clearTimeout(t);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r;
+    }, function (e) { clearTimeout(t); throw e; });
+  }
+  // Try each proxy in order until one returns 2xx; resolves with the Response.
+  function fetchProxied(url) {
+    var i = 0;
+    function next(err) {
+      if (i >= PROXIES.length) return Promise.reject(err || new Error('proxies failed'));
+      return fetchT(PROXIES[i++](url), null, PROXY_TIMEOUT_MS).catch(next);
+    }
+    return next();
+  }
+
+  // ---------------------------------------------------------------- price sources
+  // Each source returns Promise<{ [id]: {price, chg, pct, hist, src} }> covering some subset.
+  function srcYahooSpark(syms) {
+    var tick = syms.map(function (s) { return s.yahoo; }).join(',');
+    var url = 'https://query1.finance.yahoo.com/v7/finance/spark?symbols=' + encodeURIComponent(tick) + '&range=1mo&interval=1d';
+    return fetchProxied(url).then(function (r) { return r.json(); }).then(function (j) {
+      var out = {}, res = (j && j.spark && j.spark.result) || [];
+      res.forEach(function (row) {
+        var resp = row.response && row.response[0]; if (!resp || !resp.meta) return;
+        var s = syms.filter(function (x) { return x.yahoo === row.symbol; })[0]; if (!s) return;
+        var m = resp.meta, closes = ((resp.indicators || {}).quote || [{}])[0].close || [];
+        var hist = closes.filter(function (v) { return v != null; });
+        var price = m.regularMarketPrice != null ? m.regularMarketPrice : hist[hist.length - 1];
+        var pct = m.regularMarketChangePercent;
+        var chg = (pct != null && price != null) ? price * pct / (100 + pct) : m.fulldayChange;
+        if (pct == null && hist.length > 1) { chg = price - hist[hist.length - 2]; pct = chg / hist[hist.length - 2] * 100; }
+        out[s.id] = { price: price, chg: chg, pct: pct, hist: hist, src: 'Yahoo', hint: m.priceHint };
+      });
+      if (!Object.keys(out).length) throw new Error('empty');
+      return out;
+    });
+  }
+  function srcYahooChart(syms) { // per-symbol fallback, same proxy
+    return Promise.all(syms.map(function (s) {
+      var url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(s.yahoo) + '?range=1mo&interval=1d';
+      return fetchProxied(url).then(function (r) { return r.json(); }).then(function (j) {
+        var res = j && j.chart && j.chart.result && j.chart.result[0]; if (!res) return null;
+        var m = res.meta || {}, closes = ((res.indicators || {}).quote || [{}])[0].close || [];
+        var hist = closes.filter(function (v) { return v != null; });
+        var price = m.regularMarketPrice != null ? m.regularMarketPrice : hist[hist.length - 1];
+        var pct = m.regularMarketChangePercent, chg = (pct != null && price != null) ? price * pct / (100 + pct) : m.fulldayChange;
+        if (pct == null && hist.length > 1) { chg = price - hist[hist.length - 2]; pct = chg / hist[hist.length - 2] * 100; }
+        return [s.id, { price: price, chg: chg, pct: pct, hist: hist, src: 'Yahoo', hint: m.priceHint }];
+      }).catch(function () { return null; });
+    })).then(function (rows) {
+      var out = {}; rows.forEach(function (r) { if (r) out[r[0]] = r[1]; });
+      if (!Object.keys(out).length) throw new Error('empty'); return out;
+    });
+  }
+  function srcStooq(syms) { // last resort (unverified from sandbox; stooq blocks many hosts)
+    var tick = syms.map(function (s) { return s.stooq; }).join(',');
+    var url = 'https://stooq.com/q/l/?s=' + tick + '&f=sd2t2ohlcv&h&e=csv';
+    return fetchProxied(url).then(function (r) { return r.text(); }).then(function (csv) {
+      var out = {}, lines = csv.trim().split(/\r?\n/).slice(1);
+      lines.forEach(function (ln) {
+        var c = ln.split(','); if (c.length < 7) return;
+        var s = syms.filter(function (x) { return x.stooq.toLowerCase() === c[0].toLowerCase(); })[0];
+        var open = parseFloat(c[3]), close = parseFloat(c[6]);
+        if (!s || isNaN(close)) return;
+        out[s.id] = { price: close, chg: close - open, pct: (close - open) / open * 100, hist: [], src: 'Stooq' };
+      });
+      if (!Object.keys(out).length) throw new Error('empty'); return out;
+    });
+  }
+  function srcEIA(syms) { // daily spot history for Brent/WTI when a key is present
+    var key = state.keys.eia; var eias = syms.filter(function (s) { return s.eia; });
+    if (!key || !eias.length) return Promise.resolve({});
+    return Promise.all(eias.map(function (s) {
+      var url = 'https://api.eia.gov/v2/petroleum/pri/spt/data/?api_key=' + encodeURIComponent(key) +
+        '&frequency=daily&data[0]=value&facets[series][]=' + s.eia + '&sort[0][column]=period&sort[0][direction]=desc&length=30';
+      return fetchT(url).then(function (r) { return r.json(); }).then(function (j) {
+        var rows = (j && j.response && j.response.data) || []; if (!rows.length) return null;
+        var hist = rows.map(function (d) { return parseFloat(d.value); }).filter(function (v) { return !isNaN(v); }).reverse();
+        var last = hist[hist.length - 1], prev = hist[hist.length - 2];
+        return [s.id, { price: last, chg: prev != null ? last - prev : null, pct: prev ? (last - prev) / prev * 100 : null, hist: hist, src: 'EIA spot', date: rows[0].period }];
+      }).catch(function () { return null; });
+    })).then(function (rows) { var out = {}; rows.forEach(function (r) { if (r) out[r[0]] = r[1]; }); return out; });
+  }
+
+  function fetchPrices(syms) {
+    var chain = [srcYahooSpark, srcYahooChart, srcStooq];
+    var i = 0;
+    function next() {
+      if (i >= chain.length) return Promise.reject(new Error('all sources failed'));
+      var fn = chain[i++];
+      return fn(syms).then(function (out) {
+        var missing = syms.filter(function (s) { return !out[s.id]; });
+        if (missing.length && i < chain.length) {
+          return chain[i](missing).then(function (more) { Object.keys(more).forEach(function (k) { out[k] = more[k]; }); return out; }, function () { return out; });
+        }
+        return out;
+      }, function () { return next(); });
+    }
+    return Promise.all([next(), srcEIA(syms)]).then(function (res) {
+      var out = res[0], eia = res[1];
+      Object.keys(eia).forEach(function (id) { // EIA overrides commodity spot when available
+        var q = out[id]; out[id] = eia[id];
+        if (q) out[id].futures = q; // keep futures quote for tooltip
+      });
+      return out;
+    });
+  }
+
+  // ---------------------------------------------------------------- news
+  function fetchFeed(f) {
+    var url = 'https://api.rss2json.com/v1/api.json?rss_url=' + encodeURIComponent(f.url);
+    return fetchT(url).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j || j.status !== 'ok') return [];
+      return (j.items || []).map(function (it) {
+        var t = Date.parse((it.pubDate || '').replace(' ', 'T') + (/(Z|[+-]\d\d:?\d\d)$/.test(it.pubDate || '') ? '' : 'Z'));
+        return { title: it.title || '', link: it.link || '#', source: f.name, date: isNaN(t) ? Date.now() : t };
+      });
+    }).catch(function () { return []; });
+  }
+  function fetchNews() { // sequential: rss2json 429s on concurrent calls from one IP
+    var lists = [];
+    return FEEDS.reduce(function (p, f) {
+      return p.then(function () { return fetchFeed(f); }).then(function (l) { lists.push(l); });
+    }, Promise.resolve()).then(function () {
+      var all = [].concat.apply([], lists);
+      if (!all.length) throw new Error('no feeds');
+      all.sort(function (a, b) { return b.date - a.date; });
+      return all.slice(0, 40);
+    });
+  }
+
+  // ---------------------------------------------------------------- watchlist
+  var watchlist = {
+    list: function () { var v = safeGet(LS_WATCH); return Array.isArray(v) ? v : []; },
+    add: function (sym) {
+      sym = String(sym || '').trim().toUpperCase().replace(/[^A-Z0-9.=\-^]/g, '');
+      if (!sym) return false;
+      var l = watchlist.list(); if (l.indexOf(sym) >= 0) return false;
+      l.push(sym); safeSet(LS_WATCH, l); renderWatch(); refresh(); return true;
+    },
+    remove: function (sym) {
+      var l = watchlist.list().filter(function (s) { return s !== String(sym).toUpperCase(); });
+      safeSet(LS_WATCH, l); renderWatch(); return true;
+    },
+    clear: function () { safeSet(LS_WATCH, []); renderWatch(); }
+  };
+
+  // ---------------------------------------------------------------- cache
+  function saveCache() { safeSet(LS_CACHE, { quotes: state.quotes, news: state.news, stamps: state.stamps }); }
+  function loadCache() {
+    var c = safeGet(LS_CACHE); if (!c || !c.quotes) return;
+    state.quotes = c.quotes || {}; state.news = c.news || []; state.stamps = c.stamps || state.stamps; state.stale = true;
+  }
+
+  // ---------------------------------------------------------------- keys
+  function loadKeys() { state.keys = safeGet(LS_KEYS) || {}; return state.keys; }
+  function setKeys(k) {
+    var cur = loadKeys();
+    Object.keys(k || {}).forEach(function (n) { if (k[n]) cur[n] = String(k[n]).trim(); else delete cur[n]; });
+    safeSet(LS_KEYS, cur); state.keys = cur;
+    if (root) refresh();
+    return cur;
+  }
+
+  // ---------------------------------------------------------------- render
+  function sparkline(hist, up) {
+    if (!hist || hist.length < 2) return '<svg class="fd-spark fd-spark-empty" viewBox="0 0 80 22" aria-hidden="true"><line x1="0" y1="11" x2="80" y2="11"/></svg>';
+    var w = 80, h = 22, p = 2, min = Math.min.apply(null, hist), max = Math.max.apply(null, hist), rng = (max - min) || 1;
+    var pts = hist.map(function (v, i) {
+      var x = p + i * (w - 2 * p) / (hist.length - 1), y = h - p - (v - min) / rng * (h - 2 * p);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    var cls = up === false ? 'dn' : (up ? 'up' : 'flat');
+    return '<svg class="fd-spark ' + cls + '" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true">' +
+      '<polyline points="' + pts.join(' ') + '"/><circle r="1.8" cx="' + pts[pts.length - 1].split(',')[0] + '" cy="' + pts[pts.length - 1].split(',')[1] + '"/></svg>';
+  }
+  function priceRow(sym, q, opts) {
+    opts = opts || {};
+    var d = q ? (q.pct != null ? q.pct : q.chg) : null;
+    var up = d != null ? (d > 0 ? true : d < 0 ? false : null) : null;
+    var cls = up === true ? 'up' : up === false ? 'dn' : 'flat';
+    var dec = q && q.hint != null ? Math.min(q.hint, 4) : undefined;
+    var title = sym.label + (sym.unit ? ' · ' + sym.unit : '') + (q && q.src ? ' · ' + q.src : '') + (q && q.date ? ' ' + q.date : '');
+    return '<div class="fd-row ' + cls + (q ? '' : ' na') + '" data-sym="' + esc(sym.id) + '" title="' + esc(title) + '">' +
+      '<div class="fd-c-sym"><span class="fd-tick">' + esc(sym.id) + '</span><span class="fd-name">' + esc(sym.label) + '</span></div>' +
+      '<div class="fd-c-num fd-last">' + (q ? fmt(q.price, dec) : '—') + '</div>' +
+      '<div class="fd-c-num fd-chg">' + (q ? signed(q.chg, dec != null ? dec : 2) : '—') + '</div>' +
+      '<div class="fd-c-num fd-pct">' + (q ? signed(q.pct, 2, '%') : '—') + '</div>' +
+      '<div class="fd-c-spark">' + sparkline(q && q.hist, up) + '</div>' +
+      (opts.removable ? '<button class="fd-rm" data-rm="' + esc(sym.id) + '" title="Remove" aria-label="Remove ' + esc(sym.id) + '">×</button>' : '') +
+      '</div>';
+  }
+  function header(extra) {
+    return '<div class="fd-row fd-head"><div class="fd-c-sym">SYMBOL</div><div class="fd-c-num">LAST</div><div class="fd-c-num">CHG</div><div class="fd-c-num">CHG%</div><div class="fd-c-spark">30D</div>' + (extra ? '<div class="fd-rm-ph"></div>' : '') + '</div>';
+  }
+  function stamp(section) {
+    var s = state.stamps[section]; return s ? 'updated ' + utcStamp(new Date(s)) : 'waiting…';
+  }
+  function status(el, msg, kind) { if (!el) return; el.textContent = msg; el.className = 'fd-status' + (kind ? ' ' + kind : ''); }
+
+  function renderPrices() {
+    if (!els.prices) return;
+    var html = header(false), groups = { cmdty: 'CRUDE & GAS', tanker: 'TANKERS', major: 'MAJORS' }, seen = {};
+    SYMBOLS.forEach(function (s) {
+      if (!seen[s.kind]) { seen[s.kind] = 1; html += '<div class="fd-group">' + groups[s.kind] + '</div>'; }
+      html += priceRow(s, state.quotes[s.id]);
+    });
+    els.prices.innerHTML = html;
+    status(els.pricesStatus, state.errors.prices ? 'source unavailable — ' + state.errors.prices : stamp('prices') + (state.stale && inflight ? ' · refreshing' : ''), state.errors.prices ? 'err' : '');
+  }
+  function renderNews() {
+    if (!els.news) return;
+    if (state.errors.news) { els.news.innerHTML = '<div class="fd-empty">source unavailable — ' + esc(state.errors.news) + '</div>'; }
+    else if (!state.news.length) { els.news.innerHTML = '<div class="fd-empty">loading feeds…</div>'; }
+    else {
+      els.news.innerHTML = state.news.map(function (n) {
+        return '<a class="fd-news-item" href="' + esc(n.link) + '" target="_blank" rel="noopener noreferrer">' +
+          '<span class="fd-news-title">' + esc(n.title) + '</span>' +
+          '<span class="fd-news-meta"><span class="fd-news-src">' + esc(n.source) + '</span><span class="fd-news-time">' + relTime(n.date) + '</span></span></a>';
+      }).join('');
+    }
+    status(els.newsStatus, state.errors.news ? 'source unavailable' : stamp('news') + (state.stale ? ' (stale)' : ''), state.errors.news ? 'err' : '');
+  }
+  function renderWatch() {
+    if (!els.watch) return;
+    var l = watchlist.list();
+    if (!l.length) { els.watch.innerHTML = '<div class="fd-empty">no symbols — add a ticker above (e.g. VLO, TRMD, GLNG)</div>'; }
+    else {
+      els.watch.innerHTML = header(true) + l.map(function (id) { return priceRow(symFor(id), state.quotes[id.toUpperCase()], { removable: true }); }).join('');
+    }
+    status(els.watchStatus, l.length ? stamp('prices') : '');
+  }
+  function renderAll() { renderPrices(); renderNews(); renderWatch(); }
+
+  // ---------------------------------------------------------------- refresh
+  function refresh(opts) {
+    opts = opts || {};
+    if (!root) return Promise.resolve();
+    if (inflight) { pending = true; return inflight; }
+    var syms = SYMBOLS.slice();
+    watchlist.list().forEach(function (id) { if (!findSym(id)) syms.push(symFor(id)); });
+    var pP = fetchPrices(syms).then(function (out) {
+      Object.keys(out).forEach(function (k) { state.quotes[k] = out[k]; });
+      state.stamps.prices = Date.now(); state.errors.prices = null; saveCache();
+      var miss = syms.filter(function (s) { return !out[s.id]; });
+      if (miss.length === syms.length) state.errors.prices = 'no quotes returned';
+    }, function (e) { state.errors.prices = (e && e.message) || 'fetch failed'; })
+      .then(function () { renderPrices(); renderWatch(); });
+    var newsDue = opts.force || !state.stamps.news || (Date.now() - state.stamps.news) > NEWS_MIN_MS;
+    var nP = (newsDue ? fetchNews() : Promise.resolve(state.news)).then(function (items) { state.news = items; if (newsDue) { state.stamps.news = Date.now(); saveCache(); } state.errors.news = null; state.stale = false; },
+      function (e) { if (!state.news.length) state.errors.news = (e && e.message) || 'fetch failed'; else state.stale = true; }).then(renderNews);
+    inflight = Promise.all([pP, nP]).then(function () { inflight = null; if (pending) { pending = false; refresh(); } });
+    return inflight;
+  }
+
+  // ---------------------------------------------------------------- mount
+  function mount(containerEl) {
+    if (!containerEl) throw new Error('FD.markets.mount: container required');
+    unmount();
+    root = containerEl; loadKeys(); loadCache();
+    root.classList.add('fd-markets');
+    root.innerHTML =
+      '<section class="fd-sec" data-sec="prices"><div class="fd-sec-head"><h3>PRICES</h3><span class="fd-status" data-st="prices">waiting…</span><button class="fd-btn fd-refresh" title="Refresh">↻</button></div><div class="fd-grid" data-grid="prices"></div></section>' +
+      '<section class="fd-sec" data-sec="news"><div class="fd-sec-head"><h3>NEWS</h3><span class="fd-status" data-st="news">waiting…</span></div><div class="fd-news" data-grid="news"></div></section>' +
+      '<section class="fd-sec" data-sec="watch"><div class="fd-sec-head"><h3>WATCHLIST</h3><span class="fd-status" data-st="watch"></span></div>' +
+      '<form class="fd-watch-form" autocomplete="off"><input class="fd-input" name="sym" placeholder="ticker (e.g. VLO)" maxlength="12" spellcheck="false" aria-label="Add symbol"><button class="fd-btn fd-add" type="submit">ADD</button></form>' +
+      '<div class="fd-grid" data-grid="watch"></div></section>';
+    els = {
+      prices: root.querySelector('[data-grid="prices"]'), pricesStatus: root.querySelector('[data-st="prices"]'),
+      news: root.querySelector('[data-grid="news"]'), newsStatus: root.querySelector('[data-st="news"]'),
+      watch: root.querySelector('[data-grid="watch"]'), watchStatus: root.querySelector('[data-st="watch"]'),
+      form: root.querySelector('.fd-watch-form')
+    };
+    root.addEventListener('click', onClick);
+    els.form.addEventListener('submit', onSubmit);
+    renderAll();
+    refresh();
+    timer = setInterval(function () { if (document.hidden) return; refresh(); }, REFRESH_MS);
+    return api;
+  }
+  function onClick(e) {
+    var rm = e.target.closest && e.target.closest('[data-rm]');
+    if (rm) { e.preventDefault(); watchlist.remove(rm.getAttribute('data-rm')); return; }
+    if (e.target.closest && e.target.closest('.fd-refresh')) { e.preventDefault(); refresh({ force: true }); }
+  }
+  function onSubmit(e) {
+    e.preventDefault(); var inp = els.form.querySelector('input'); watchlist.add(inp.value); inp.value = ''; inp.focus();
+  }
+  function unmount() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (root) { root.removeEventListener('click', onClick); root.classList.remove('fd-markets'); root.innerHTML = ''; }
+    root = null; els = {};
+  }
+
+  var api = {
+    mount: mount, unmount: unmount, refresh: refresh, watchlist: watchlist,
+    setKeys: setKeys, getKeys: loadKeys, symbols: SYMBOLS, state: state,
+    quote: function (id) { return state.quotes[String(id).toUpperCase()] || null; }
+  };
+  window.FD.markets = api;
+})();
+
+</script>
+<script>
+/* ===== shell/shell.js ===== */
+/* FlowDeck shell — app chrome + integration of FD.data / FD.map / FD.markets / FD.splc.
+ * Plain browser JS, no bundler. Attaches window.FD.shell = { run(cmd), openSettings(), help(), state }.
+ */
+(function () {
+  'use strict';
+  window.FD = window.FD || {};
+  var FD = window.FD;
+
+  var LS_KEYS = 'fd.keys';
+  var PHONE_MQ = '(max-width: 768px)';
+
+  // ---------------------------------------------------------------- storage
+  function lsGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  function loadKeys() { return lsGet(LS_KEYS) || {}; }
+  function saveKeys(patch) {
+    var cur = loadKeys();
+    Object.keys(patch).forEach(function (n) {
+      var v = patch[n];
+      if (v === '' || v === null || v === undefined || v === false) delete cur[n]; else cur[n] = v;
+    });
+    lsSet(LS_KEYS, cur);
+    return cur;
+  }
+
+  // ---------------------------------------------------------------- dom helpers
+  function h(tag, attrs, children) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      var v = attrs[k];
+      if (v === null || v === undefined) return;
+      if (k === 'text') el.textContent = v;
+      else if (k === 'html') el.innerHTML = v;
+      else if (k.slice(0, 2) === 'on') el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v);
+    });
+    (children || []).forEach(function (c) { if (c) el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return el;
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function utcClock(d) { return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds()) + 'Z'; }
+  function isPhone() { return window.matchMedia(PHONE_MQ).matches; }
+
+  // ---------------------------------------------------------------- state
+  var state = {
+    aisState: 'closed', aisMsg: '', demo: false,
+    stats: { count: 0, tankers: 0, laden: 0, ballast: 0, chokePoints: [] },
+    lastTick: null, needFullRefresh: true, tab: 'markets', mounted: { markets: false, splc: false },
+    selected: null, splcLayer: null
+  };
+  var els = {};
+
+  // choke-point id -> map preset (where one exists)
+  var CHOKE_PRESET = { hormuz: 'hormuz', malacca: 'malacca', suez: 'suez', bosphorus: 'blacksea', danish: 'northsea', gibraltar: null, babelmandeb: null, panama: 'caribbean', goodhope: null };
+
+  // ---------------------------------------------------------------- build chrome
+  function build() {
+    var app = document.getElementById('fd-app') || document.body.appendChild(h('div', { id: 'fd-app' }));
+    app.innerHTML = '';
+
+    // top bar
+    els.cmdInput = h('input', { type: 'text', placeholder: 'command — MAP, TANK, GAS, PX, NEWS, WL, SPLC WMT, GO HORMUZ, SET, HELP', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Command', id: 'fd-cmd' });
+    els.cmdHint = h('span', { class: 'fd-cmd-hint', text: 'press / to focus' });
+    var top = h('header', { class: 'fd-top' }, [
+      h('div', { class: 'fd-wordmark', text: 'FLOWDECK', title: 'FlowDeck — commodity flow terminal' }),
+      h('div', { class: 'fd-cmd' }, [h('span', { class: 'fd-cmd-prompt', text: '>' }), els.cmdInput, els.cmdHint]),
+      h('div', { class: 'fd-top-btns' }, [
+        h('button', { class: 'fd-ibtn', text: 'SET', title: 'Settings', onclick: openSettings }),
+        h('button', { class: 'fd-ibtn', text: 'HELP', title: 'Commands', onclick: openHelp })
+      ])
+    ]);
+
+    // status strip
+    els.dot = h('span', { class: 'fd-dot', 'data-state': 'closed' });
+    els.stAis = h('b', { text: 'OFFLINE' });
+    els.stCount = h('b', { text: '0' });
+    els.stTank = h('b', { text: '0' });
+    els.stLaden = h('b', { text: '0' });
+    els.stBallast = h('b', { text: '0' });
+    els.stUpdated = h('b', { text: '—' });
+    els.stClock = h('b', { class: 'acc', text: utcClock(new Date()) });
+    var strip = h('div', { class: 'fd-status-strip', role: 'status' }, [
+      h('span', { class: 'fd-st-item' }, [els.dot, 'AIS ', els.stAis]),
+      h('span', { class: 'fd-st-item' }, ['VESSELS ', els.stCount]),
+      h('span', { class: 'fd-st-item' }, ['TANKERS ', els.stTank]),
+      h('span', { class: 'fd-st-item' }, ['LADEN ', els.stLaden, ' / BALLAST ', els.stBallast]),
+      h('span', { class: 'fd-st-item' }, ['UPDATED ', els.stUpdated]),
+      h('span', { class: 'fd-st-spacer' }),
+      h('span', { class: 'fd-st-item' }, ['UTC ', els.stClock])
+    ]);
+
+    // banner
+    els.banner = h('div', { class: 'fd-banner', hidden: 'hidden' }, [
+      h('b', { text: 'DEMO' }),
+      h('span', { html: 'Demo data — add a free <a data-act="set">aisstream.io key in SET</a> for live AIS' }),
+      h('button', { class: 'x', title: 'Dismiss', text: '×', onclick: function () { els.banner.hidden = true; } })
+    ]);
+    els.banner.querySelector('[data-act="set"]').addEventListener('click', openSettings);
+
+    // main: map + side panel
+    els.map = h('div', { id: 'fd-map' });
+    els.drawer = h('aside', { class: 'fd-drawer', 'aria-label': 'Vessel detail' });
+    els.mapwrap = h('div', { class: 'fd-mapwrap' }, [els.map, els.drawer]);
+
+    els.tabs = {};
+    els.panes = {};
+    var tabBar = h('div', { class: 'fd-tabs', role: 'tablist' });
+    var panes = h('div', { class: 'fd-panes' });
+    [['markets', 'MARKETS'], ['splc', 'SPLC'], ['choke', 'CHOKE']].forEach(function (t) {
+      els.tabs[t[0]] = h('button', { class: 'fd-tab', role: 'tab', 'aria-selected': 'false', 'data-tab': t[0], text: t[1], onclick: function () { showTab(t[0]); } });
+      tabBar.appendChild(els.tabs[t[0]]);
+      els.panes[t[0]] = h('div', { class: 'fd-pane', id: 'fd-pane-' + t[0], role: 'tabpanel' });
+      panes.appendChild(els.panes[t[0]]);
+    });
+    els.side = h('section', { class: 'fd-side' }, [tabBar, panes]);
+    var main = h('div', { class: 'fd-main' }, [els.mapwrap, els.side]);
+
+    // modals
+    els.settingsBg = h('div', { class: 'fd-modal-bg', id: 'fd-settings' });
+    els.helpBg = h('div', { class: 'fd-modal-bg', id: 'fd-help' });
+    [els.settingsBg, els.helpBg].forEach(function (bg) { bg.addEventListener('click', function (e) { if (e.target === bg) closeModals(); }); });
+
+    app.appendChild(top); app.appendChild(strip); app.appendChild(els.banner); app.appendChild(main);
+    document.body.appendChild(els.settingsBg); document.body.appendChild(els.helpBg);
+
+    // choke pane skeleton
+    els.chokeBody = h('tbody');
+    els.panes.choke.appendChild(h('table', { class: 'fd-choke-table' }, [
+      h('thead', null, [h('tr', null, [h('th', { text: 'CHOKE POINT' }), h('th', { class: 'n', text: 'VESSELS' }), h('th', { class: 'n', text: 'TANKERS' })])]),
+      els.chokeBody
+    ]));
+    els.panes.choke.appendChild(h('p', { class: 'fd-pane-note', text: 'Counts are vessels currently inside each hand-drawn polygon. Click a row to fly there.' }));
+
+    // command input
+    els.cmdInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); run(els.cmdInput.value); els.cmdInput.value = ''; }
+      else if (e.key === 'Escape') { els.cmdInput.blur(); }
+    });
+    els.cmdInput.addEventListener('input', function () { setHint('', ''); });
+  }
+
+  function setHint(text, cls) {
+    els.cmdHint.textContent = text || 'press / to focus';
+    els.cmdHint.className = 'fd-cmd-hint' + (cls ? ' ' + cls : '');
+    if (cls) { clearTimeout(setHint.t); setHint.t = setTimeout(function () { setHint('', ''); }, 4000); }
+  }
+
+  // ---------------------------------------------------------------- tabs
+  function showTab(id) {
+    state.tab = id;
+    Object.keys(els.tabs).forEach(function (k) {
+      els.tabs[k].setAttribute('aria-selected', k === id ? 'true' : 'false');
+      els.panes[k].classList.toggle('active', k === id);
+    });
+    if (id === 'markets' && !state.mounted.markets && FD.markets) {
+      state.mounted.markets = true;
+      try { FD.markets.mount(els.panes.markets); } catch (e) { console.error('[FD.shell] markets mount failed', e); }
+    }
+    if (id === 'splc' && !state.mounted.splc && FD.splc) {
+      state.mounted.splc = true;
+      try { FD.splc.mount(els.panes.splc, { onEntity: function () { showTab('splc'); }, onPlot: plotEntities }); } catch (e) { console.error('[FD.shell] splc mount failed', e); }
+    }
+    if (isPhone()) { try { els.side.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
+  }
+  function scrollToSection(sec) {
+    showTab('markets');
+    var s = els.panes.markets.querySelector('[data-sec="' + sec + '"]');
+    if (s) { try { s.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
+  }
+
+  // ---------------------------------------------------------------- status strip
+  function renderStatus() {
+    var st = state.aisState, label;
+    var dotState = st;
+    if (st === 'live' && state.demo) { dotState = 'demo'; label = 'DEMO'; }
+    else label = { live: 'LIVE', connecting: 'CONNECTING', error: 'ERROR', closed: 'OFFLINE' }[st] || st.toUpperCase();
+    els.dot.setAttribute('data-state', dotState);
+    els.stAis.textContent = label;
+    els.stAis.title = state.aisMsg || '';
+    var s = state.stats;
+    els.stCount.textContent = s.count || 0;
+    els.stTank.textContent = s.tankers || 0;
+    els.stLaden.textContent = s.laden || 0;
+    els.stBallast.textContent = s.ballast || 0;
+    els.stUpdated.textContent = state.lastTick ? utcClock(new Date(state.lastTick)) : '—';
+  }
+  function renderChokeTable() {
+    var rows = (FD.data && FD.data.chokePoints || []).slice().sort(function (a, b) { return (b.count - a.count) || (b.tankerCount - a.tankerCount); });
+    var max = rows.reduce(function (m, r) { return Math.max(m, r.count || 0); }, 0) || 1;
+    els.chokeBody.innerHTML = rows.map(function (r) {
+      return '<tr class="row" data-id="' + esc(r.id) + '"><td>' + esc(r.name) + '<div class="bar" style="width:' + Math.round((r.count || 0) / max * 100) + '%"></div></td>' +
+        '<td class="n"><b>' + (r.count || 0) + '</b></td><td class="n">' + (r.tankerCount || 0) + '</td></tr>';
+    }).join('');
+  }
+  function onChokeClick(e) {
+    var tr = e.target.closest && e.target.closest('tr.row'); if (!tr) return;
+    var id = tr.getAttribute('data-id'), preset = CHOKE_PRESET[id];
+    var cp = (FD.data.chokePoints || []).filter(function (c) { return c.id === id; })[0];
+    if (preset && FD.map.flyTo(preset)) { /* preset view */ }
+    else if (cp && cp.center && FD.map.getMap()) { FD.map.getMap().flyTo(cp.center, 6, { duration: 0.8 }); }
+    if (isPhone()) { try { els.mapwrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (er) {} }
+  }
+
+  // ---------------------------------------------------------------- data wiring
+  function wireData() {
+    if (!FD.data) return;
+    FD.data.on('status', function (s) {
+      state.aisState = s.state; state.aisMsg = s.msg || '';
+      state.demo = !!(FD.data.isDemo && FD.data.isDemo());
+      if (s.state === 'connecting') state.needFullRefresh = true;
+      renderStatus();
+    });
+    FD.data.on('tick', function (t) {
+      state.stats = t; state.lastTick = Date.now();
+      state.demo = !!(FD.data.isDemo && FD.data.isDemo());
+      if (state.needFullRefresh) { state.needFullRefresh = false; FD.map.setVessels(FD.data.vessels()); }
+      FD.map.setChokePoints(FD.data.chokePoints);
+      renderStatus(); renderChokeTable();
+      if (state.selected) { var v = FD.data.vessels().get(state.selected.mmsi); if (v) renderDrawer(v); }
+    });
+    FD.data.on('vessel', function (v) { if (!state.needFullRefresh) FD.map.upsertVessel(v); });
+  }
+  function startDemo() {
+    state.needFullRefresh = true;
+    FD.data.loadDemo();
+    els.banner.hidden = false;
+  }
+  function startLive(key) {
+    state.needFullRefresh = true;
+    els.banner.hidden = true;
+    FD.map.setVessels([]);
+    FD.data.disconnect();
+    FD.data.connect({ apiKey: key });
+  }
+  function applyConnection() {
+    var k = loadKeys();
+    if (k.aisstream && !k.demo) startLive(k.aisstream); else startDemo();
+  }
+
+  // ---------------------------------------------------------------- vessel drawer
+  function fmt(v, suffix, digits) { return (v === null || v === undefined || v === '' || (typeof v === 'number' && isNaN(v))) ? '—' : (typeof v === 'number' && digits != null ? v.toFixed(digits) : v) + (suffix || ''); }
+  function ago(ts) {
+    if (!ts) return '—';
+    var s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 60) return s + 's ago'; if (s < 3600) return Math.round(s / 60) + 'm ago'; return Math.round(s / 3600) + 'h ago';
+  }
+  function renderDrawer(v) {
+    state.selected = v;
+    var ladenPill = v.laden === true ? '<span class="fd-pill laden">LADEN</span>' : v.laden === false ? '<span class="fd-pill ballast">BALLAST</span>' : '<span class="fd-pill">UNKNOWN</span>';
+    els.drawer.innerHTML =
+      '<div class="fd-drawer-head"><h2>' + esc(v.name || 'MMSI ' + v.mmsi) + '<span class="sub">' + esc(v.typeLabel || 'Vessel') + (v.flag ? ' · ' + esc(v.flag) : '') + (v.shipType != null ? ' · AIS ' + esc(v.shipType) : '') + '</span></h2>' +
+      '<button class="x" title="Close (Esc)" aria-label="Close">×</button></div>' +
+      '<dl class="fd-kv">' +
+      '<dt>State</dt><dd>' + ladenPill + (v.chokePoint ? ' <span class="fd-pill choke">' + esc(v.chokePoint) + '</span>' : '') + '</dd>' +
+      '<dt>SOG / COG</dt><dd>' + fmt(v.sog, ' kn', 1) + ' / ' + fmt(v.cog, '°', 0) + (v.heading != null ? ' (hdg ' + fmt(v.heading, '°', 0) + ')' : '') + '</dd>' +
+      '<dt>Draught</dt><dd>' + fmt(v.draught, ' m', 1) + (v.maxDraught ? ' / max ' + fmt(v.maxDraught, ' m', 1) : '') + '</dd>' +
+      '<dt>Destination</dt><dd>' + esc(fmt(v.destination)) + '</dd>' +
+      '<dt>ETA</dt><dd>' + esc(fmt(v.eta)) + '</dd>' +
+      '<dt>Position</dt><dd>' + fmt(v.lat, '', 3) + ', ' + fmt(v.lon, '', 3) + '</dd>' +
+      '<dt>Last seen</dt><dd>' + ago(v.lastSeen) + '</dd>' +
+      '<dt>MMSI / IMO</dt><dd>' + esc(v.mmsi) + ' / ' + esc(fmt(v.imo)) + '</dd>' +
+      '</dl>';
+    els.drawer.querySelector('.x').addEventListener('click', closeDrawer);
+    els.drawer.classList.add('open');
+  }
+  function closeDrawer() {
+    state.selected = null;
+    els.drawer.classList.remove('open');
+    if (FD.map && FD.map.select) { try { FD.map.select(null); } catch (e) {} }
+  }
+
+  // ---------------------------------------------------------------- SPLC plotting
+  function plotEntities(entities) {
+    var map = FD.map.getMap(); if (!map || !window.L) return;
+    if (!state.splcLayer) state.splcLayer = L.layerGroup().addTo(map);
+    state.splcLayer.clearLayers();
+    var pts = [];
+    (entities || []).forEach(function (e) {
+      if (!e.hq || typeof e.hq.lat !== 'number') return;
+      var role = e.role || 'entity';
+      var icon = L.divIcon({ className: 'fd-splc-marker ' + role, iconSize: role === 'root' ? [16, 16] : [12, 12] });
+      var m = L.marker([e.hq.lat, e.hq.lon], { icon: icon, zIndexOffset: 1000 });
+      m.bindTooltip('<div class="fd-splc-tip"><b>' + esc(e.ticker || e.name) + '</b> ' + esc(e.name) + '<br>' + esc(role.toUpperCase()) +
+        (e.exposurePct != null ? ' · ' + e.exposurePct + '%' : '') + ' · ' + esc(e.hq.city || '') + '</div>', { className: 'fd-splc-tt', direction: 'top', offset: [0, -8] });
+      m.on('click', function () { if (FD.splc && e.ticker) { showTab('splc'); FD.splc.lookup(e.ticker); } });
+      state.splcLayer.addLayer(m); pts.push([e.hq.lat, e.hq.lon]);
+    });
+    if (pts.length) { try { map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 }); } catch (e) {} }
+    if (isPhone()) { try { els.mapwrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
+    setHint('plotted ' + pts.length + ' HQ', 'ok');
+  }
+  function clearPlot() { if (state.splcLayer) state.splcLayer.clearLayers(); }
+
+  // ---------------------------------------------------------------- commands
+  var COMMANDS = [
+    ['MAP', 'Show map, clear vessel filter'],
+    ['TANK', 'Map, tankers only'],
+    ['GAS', 'Map, LNG/LPG carriers only'],
+    ['PX', 'Prices panel'],
+    ['NEWS', 'News panel'],
+    ['WL', 'Watchlist panel'],
+    ['SPLC <TICKER>', 'Supply-chain graph for a ticker (e.g. SPLC WMT)'],
+    ['GO <PRESET>', 'Fly map to a preset: ' + (FD.map && FD.map.presets ? FD.map.presets.map(function (p) { return p.id; }).join(', ') : 'world, gulf, hormuz, …')],
+    ['CHOKE', 'Choke-point table'],
+    ['CLEAR', 'Remove SPLC markers from the map'],
+    ['SET', 'Settings (API keys, demo mode)'],
+    ['HELP', 'This list']
+  ];
+  function showMap() {
+    if (isPhone()) { try { els.mapwrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
+    FD.map.invalidateSize();
+  }
+  function run(raw) {
+    var line = String(raw || '').trim(); if (!line) return false;
+    var parts = line.split(/\s+/), cmd = parts[0].toUpperCase(), arg = parts.slice(1).join(' ');
+    closeModals();
+    switch (cmd) {
+      case 'MAP': FD.map.setFilter({ types: null, laden: 'all', minSog: 0 }); showMap(); setHint('map · all vessels', 'ok'); return true;
+      case 'TANK': case 'TANKER': case 'TANKERS': FD.map.setFilter({ types: ['tanker'], laden: 'all' }); showMap(); setHint('map · tankers', 'ok'); return true;
+      case 'GAS': case 'LNG': FD.map.setFilter({ types: ['gas'], laden: 'all' }); showMap(); setHint('map · gas carriers', 'ok'); return true;
+      case 'LADEN': FD.map.setFilter({ types: ['tanker'], laden: 'laden' }); showMap(); setHint('map · laden tankers', 'ok'); return true;
+      case 'BALLAST': FD.map.setFilter({ types: ['tanker'], laden: 'ballast' }); showMap(); setHint('map · ballast tankers', 'ok'); return true;
+      case 'PX': case 'PRICES': scrollToSection('prices'); return true;
+      case 'NEWS': scrollToSection('news'); return true;
+      case 'WL': case 'WATCH': case 'WATCHLIST': scrollToSection('watch'); return true;
+      case 'CHOKE': showTab('choke'); return true;
+      case 'CLEAR': clearPlot(); setHint('cleared', 'ok'); return true;
+      case 'SPLC':
+        showTab('splc');
+        if (arg && FD.splc) { FD.splc.lookup(arg); setHint('SPLC ' + arg.toUpperCase(), 'ok'); }
+        else { var inp = els.panes.splc.querySelector('input'); if (inp) inp.focus(); }
+        return true;
+      case 'GO':
+        if (!arg) { setHint('GO <preset>: ' + FD.map.presets.map(function (p) { return p.id; }).join(' '), 'err'); return false; }
+        var pid = arg.toLowerCase().replace(/[^a-z]/g, '');
+        var ok = FD.map.flyTo(pid);
+        if (!ok) { var alias = { black: 'blacksea', north: 'northsea', us: 'usgulf', africa: 'westafrica', carib: 'caribbean' }[pid]; if (alias) ok = FD.map.flyTo(alias); }
+        if (ok) { showMap(); setHint('→ ' + pid, 'ok'); }
+        else setHint('unknown preset "' + pid + '"', 'err');
+        return ok;
+      case 'SET': case 'SETTINGS': openSettings(); return true;
+      case 'HELP': case '?': openHelp(); return true;
+      case 'DEMO': saveKeys({ demo: true }); applyConnection(); return true;
+      case 'LIVE': saveKeys({ demo: false }); applyConnection(); return true;
+      default:
+        setHint('unknown "' + cmd + '" — try HELP', 'err');
+        return false;
+    }
+  }
+
+  // ---------------------------------------------------------------- modals
+  function closeModals() { els.settingsBg.classList.remove('open'); els.helpBg.classList.remove('open'); }
+  function openHelp() {
+    els.helpBg.innerHTML = '';
+    var list = h('ul', { class: 'fd-help-list' }, COMMANDS.map(function (c) { return h('li', null, [h('code', { text: c[0] }), h('span', { text: c[1] })]); }));
+    els.helpBg.appendChild(h('div', { class: 'fd-modal', role: 'dialog', 'aria-label': 'Commands' }, [
+      h('h2', null, ['COMMANDS', h('button', { class: 'x', text: '×', 'aria-label': 'Close', onclick: closeModals })]),
+      h('p', { class: 'lead', text: 'Type a command in the bar and press Enter. Commands are case-insensitive.' }),
+      list,
+      h('p', { class: 'fd-help-keys', html: '<kbd>/</kbd> focus command bar &nbsp; <kbd>Esc</kbd> close drawer / modal &nbsp; Click a vessel for details, hover for a tooltip.' })
+    ]));
+    els.helpBg.classList.add('open');
+  }
+  function field(label, name, value, opts) {
+    opts = opts || {};
+    var span = h('span', null, [label]);
+    if (opts.link) span.appendChild(h('a', { href: opts.link, target: '_blank', rel: 'noopener', text: opts.linkText || 'get a free key' }));
+    else if (opts.note) span.appendChild(h('em', { text: opts.note }));
+    return h('label', { class: 'fd-field' }, [span, h('input', { type: opts.type || 'text', name: name, value: value || '', placeholder: opts.placeholder || '', autocomplete: 'off', spellcheck: 'false' })]);
+  }
+  function openSettings() {
+    var k = loadKeys();
+    var splcProxy = (FD.splc && FD.splc.getProxy && FD.splc.getProxy()) || k.splcProxy || '';
+    els.settingsBg.innerHTML = '';
+    var form = h('form', { class: 'fd-modal', role: 'dialog', 'aria-label': 'Settings' }, [
+      h('h2', null, ['SETTINGS', h('button', { class: 'x', type: 'button', text: '×', 'aria-label': 'Close', onclick: closeModals })]),
+      h('p', { class: 'lead', text: 'Keys are stored only in this browser (localStorage "fd.keys"). All are optional; without an AIS key the app runs on demo data.' }),
+      field('aisstream.io API key (live AIS)', 'aisstream', k.aisstream, { link: 'https://aisstream.io/', placeholder: 'free key — live vessel positions' }),
+      field('EIA API key (Brent/WTI spot)', 'eia', k.eia, { link: 'https://www.eia.gov/opendata/register.php', placeholder: 'optional' }),
+      field('CARTO basemap key', 'carto', k.carto, { link: 'https://carto.com/basemaps/apikey', placeholder: 'optional — default basemap is keyless' }),
+      field('SPLC proxy base URL (EDGAR)', 'splcProxy', splcProxy, { note: 'optional — seed data works without it', placeholder: 'https://your-proxy.example/sec', type: 'url' }),
+      field('Finnhub key', 'finnhub', k.finnhub, { note: 'reserved — not wired yet', placeholder: 'stored only' }),
+      h('label', { class: 'fd-check' }, [h('input', { type: 'checkbox', name: 'demo' }), 'Demo mode (synthetic vessels even when an AIS key is set)']),
+      h('div', { class: 'fd-modal-actions' }, [
+        h('button', { class: 'fd-btn-ghost', type: 'button', text: 'CANCEL', onclick: closeModals }),
+        h('button', { class: 'fd-btn-primary', type: 'submit', text: 'SAVE' })
+      ])
+    ]);
+    form.querySelector('[name="demo"]').checked = !!k.demo;
+    form.addEventListener('submit', function (e) { e.preventDefault(); saveSettings(form); });
+    els.settingsBg.appendChild(form);
+    els.settingsBg.classList.add('open');
+    setTimeout(function () { var i = form.querySelector('[name="aisstream"]'); if (i) i.focus(); }, 0);
+  }
+  function saveSettings(form) {
+    var prev = loadKeys();
+    var v = function (n) { var i = form.querySelector('[name="' + n + '"]'); return i ? i.value.trim() : ''; };
+    var next = { aisstream: v('aisstream'), eia: v('eia'), carto: v('carto'), splcProxy: v('splcProxy'), finnhub: v('finnhub'), demo: form.querySelector('[name="demo"]').checked };
+    saveKeys(next);
+    // hand module-owned keys to their modules (markets merges into the same "fd.keys")
+    if (FD.markets && FD.markets.setKeys) { try { FD.markets.setKeys({ eia: next.eia }); } catch (e) {} }
+    if (FD.splc && FD.splc.setProxy && (next.splcProxy || '') !== (prev.splcProxy || '')) { try { FD.splc.setProxy(next.splcProxy); } catch (e) {} }
+    if ((next.carto || '') !== (prev.carto || '')) { try { FD.map.setBasemap(next.carto ? 'carto' : 'esri', next.carto || undefined); } catch (e) {} }
+    var connChanged = (next.aisstream || '') !== (prev.aisstream || '') || !!next.demo !== !!prev.demo;
+    closeModals();
+    if (connChanged) applyConnection();
+    setHint('settings saved', 'ok');
+  }
+
+  // ---------------------------------------------------------------- keyboard
+  function onKey(e) {
+    var tag = (e.target && e.target.tagName || '').toLowerCase();
+    var typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable);
+    if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); els.cmdInput.focus(); els.cmdInput.select(); return; }
+    if (e.key === 'Escape') {
+      if (els.settingsBg.classList.contains('open') || els.helpBg.classList.contains('open')) { closeModals(); return; }
+      if (els.drawer.classList.contains('open')) { closeDrawer(); return; }
+    }
+  }
+
+  // ---------------------------------------------------------------- boot
+  function boot() {
+    build();
+    document.title = 'FlowDeck';
+    var keys = loadKeys();
+    // map
+    try {
+      FD.map.mount(els.map, {
+        onSelect: function (v) { if (v) renderDrawer(v); else closeDrawer(); },
+        basemap: keys.carto ? 'carto' : 'esri', cartoKey: keys.carto || undefined
+      });
+    } catch (e) { console.error('[FD.shell] map mount failed', e); }
+    // choke pane click
+    els.chokeBody.addEventListener('click', onChokeClick);
+    // side panel default tab
+    showTab('markets');
+    // SPLC proxy from keys (mirrors to module storage)
+    if (keys.splcProxy && FD.splc && FD.splc.setProxy && !FD.splc.getProxy()) { try { FD.splc.setProxy(keys.splcProxy); } catch (e) {} }
+    // data
+    wireData();
+    renderChokeTable();
+    applyConnection();
+    // clock
+    setInterval(function () { els.stClock.textContent = utcClock(new Date()); }, 1000);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', function () { if (FD.map && FD.map.invalidateSize) FD.map.invalidateSize(); });
+    renderStatus();
+  }
+
+  FD.shell = { run: run, openSettings: openSettings, help: openHelp, showTab: showTab, plot: plotEntities, state: state, keys: loadKeys, saveKeys: saveKeys };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+
+</script>
+</body>
+</html>

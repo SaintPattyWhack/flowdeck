@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FD.data test</title>
+<style>
+  :root { --bg:#0b0d10; --fg:#d7dae0; --accent:#f5a623; --dim:#8a919c; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+  h1 { font-size:15px; color:var(--accent); margin:0 0 12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  input { background:#14181d; color:var(--fg); border:1px solid #2a3038; padding:6px 8px; min-width:260px; font:inherit; }
+  button { background:#1a1f26; color:var(--accent); border:1px solid var(--accent); padding:6px 12px; cursor:pointer; font:inherit; }
+  button:hover { background:var(--accent); color:#000; }
+  #status { color:var(--dim); }
+  #status.live { color:#4cd37b; } #status.error { color:#ff5c5c; }
+  pre { background:#101418; border:1px solid #1f252c; padding:10px; overflow:auto; max-height:70vh; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<h1>FD.data — standalone test</h1>
+<div class="row">
+  <input id="key" type="text" placeholder="aisstream.io API key" autocomplete="off">
+  <button id="connect">Connect</button>
+  <button id="demo">Demo</button>
+  <button id="stop">Disconnect</button>
+  <span id="status">closed</span>
+</div>
+<pre id="out">waiting…</pre>
+<script src="data.js"></script>
+<script>
+  var D = window.FD.data, out = document.getElementById('out'), st = document.getElementById('status');
+  var vesselEvents = 0;
+  D.on('status', function (s) { st.textContent = s.state + ' — ' + s.msg; st.className = s.state; });
+  D.on('vessel', function () { vesselEvents++; });
+  D.on('tick', function (stats) {
+    var first = Array.from(D.vessels().values()).slice(0, 10);
+    out.textContent = 'vessel events: ' + vesselEvents + '\nstats: ' + JSON.stringify(stats, null, 1) +
+      '\n\nfirst 10 vessels:\n' + JSON.stringify(first, null, 1);
+  });
+  document.getElementById('connect').onclick = function () {
+    var key = document.getElementById('key').value.trim();
+    if (!key) { st.textContent = 'enter an API key'; return; }
+    vesselEvents = 0; D.connect({ apiKey: key });
+  };
+  document.getElementById('demo').onclick = function () { vesselEvents = 0; D.loadDemo(); };
+  document.getElementById('stop').onclick = function () { D.disconnect(); };
+</script>
+</body>
+</html>

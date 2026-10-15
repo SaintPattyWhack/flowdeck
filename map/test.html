@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FD.map test</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="map.css">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #0b0e13; color: #c9d1d9; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid #2a3140; align-items: center; }
+  .bar button, .bar select, .bar input { background: #0d1117; color: #c9d1d9; border: 1px solid #2a3140; font: inherit; padding: 4px 6px; }
+  .bar button:hover { border-color: #f5a623; color: #f5a623; }
+  #map { height: calc(100vh - 100px); }
+  @media (max-width: 640px) { #map { height: 55vh; } }
+  #out { padding: 6px 8px; color: #7d8590; white-space: pre; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="b-refresh">setVessels (500)</button>
+  <button id="b-5k">setVessels (5000)</button>
+  <button id="b-stream">toggle live upserts</button>
+  <select id="f-type"><option value="">all types</option><option value="tanker">tanker</option><option value="gas">gas</option><option value="tanker,gas">tanker+gas</option><option value="cargo">cargo</option></select>
+  <select id="f-laden"><option value="all">all</option><option value="laden">laden</option><option value="ballast">ballast</option></select>
+  <input id="f-sog" type="number" min="0" step="1" value="0" style="width:60px" title="min SOG">
+  <button id="b-focus">focusVessel(random)</button>
+  <button id="b-hormuz">flyTo hormuz</button>
+</div>
+<div id="map"></div>
+<div id="out">ready</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="map.js"></script>
+<script>
+(function () {
+  // ---- fake data generator (matches PLAN.md Vessel shape) ----
+  var seed = 42;
+  function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+  function pick(a) { return a[Math.floor(rnd() * a.length)]; }
+  var regions = [ // [latS, lonW, latN, lonE, weight]
+    [24.5, 50, 27.5, 57.5, 5], [25, 55.5, 26.8, 57.3, 3], [1, 100, 5, 104, 4], [27, 32, 31, 34, 2],
+    [26, -96, 30, -84, 4], [52, -2, 61, 7, 3], [41, 28, 46, 41, 2], [-4, 0, 7, 10, 2], [10, -85, 22, -62, 3],
+    [-35, -180, 60, 180, 6]
+  ];
+  var totalW = regions.reduce(function (s, r) { return s + r[4]; }, 0);
+  function region() { var x = rnd() * totalW; for (var i = 0; i < regions.length; i++) { x -= regions[i][4]; if (x <= 0) return regions[i]; } return regions[0]; }
+  var names1 = ['NORDIC', 'GULF', 'PACIFIC', 'ATLANTIC', 'MARAN', 'FRONT', 'DHT', 'EAGLE', 'STENA', 'OLYMPIC', 'SEA', 'OCEAN', 'STAR', 'NAVE', 'ARCTIC'];
+  var names2 = ['PIONEER', 'SPIRIT', 'VOYAGER', 'HARMONY', 'GRACE', 'FORTUNE', 'LEADER', 'GLORY', 'TRADER', 'ENERGY', 'COSMOS', 'HOPE'];
+  var dests = ['FUJAIRAH', 'RAS TANURA', 'SINGAPORE', 'ROTTERDAM', 'HOUSTON', 'NINGBO', 'YOKOHAMA', 'CORPUS CHRISTI', 'SUEZ', 'NOVOROSSIYSK', 'LOME', 'ST CROIX'];
+  var flags = ['LR', 'MH', 'PA', 'GR', 'SG', 'MT', 'BS', 'HK'];
+  function makeVessel(i) {
+    var r = region();
+    var roll = rnd(), shipType, typeLabel, isGas = false;
+    if (roll < 0.55) { shipType = 80 + Math.floor(rnd() * 10); typeLabel = 'Tanker'; }
+    else if (roll < 0.68) { shipType = 80 + Math.floor(rnd() * 10); typeLabel = 'LNG/Gas'; isGas = true; }
+    else if (roll < 0.9) { shipType = 70 + Math.floor(rnd() * 10); typeLabel = 'Cargo'; }
+    else { shipType = Math.floor(rnd() * 60); typeLabel = 'Other'; }
+    var maxD = 10 + rnd() * 12, d = 4 + rnd() * maxD;
+    var laden = typeLabel === 'Tanker' ? (d >= 0.75 * maxD ? true : d < 0.5 * maxD ? false : null) : null;
+    return {
+      mmsi: 200000000 + i, imo: 9000000 + i,
+      name: (isGas ? pick(['LNG ', 'GAS ', '']) : '') + pick(names1) + ' ' + pick(names2),
+      lat: r[0] + rnd() * (r[2] - r[0]), lon: r[1] + rnd() * (r[3] - r[1]),
+      cog: rnd() * 360, sog: rnd() < 0.15 ? 0 : 2 + rnd() * 14, heading: null,
+      shipType: shipType, typeLabel: typeLabel,
+      draught: +d.toFixed(1), maxDraught: +maxD.toFixed(1), laden: laden,
+      destination: pick(dests), eta: '10-' + (16 + Math.floor(rnd() * 12)) + ' ' + ('0' + Math.floor(rnd() * 24)).slice(-2) + ':00',
+      lastSeen: Date.now() - Math.floor(rnd() * 600000), flag: pick(flags), chokePoint: null
+    };
+  }
+  function gen(n) { var a = []; for (var i = 0; i < n; i++) a.push(makeVessel(i)); return a; }
+
+  var chokePoints = [
+    { id: 'hormuz', name: 'Hormuz', polygon: [[25.2, 55.8], [26.9, 55.8], [26.9, 57.2], [25.2, 57.2]], center: [26.05, 56.5], count: 0, tankerCount: 0 },
+    { id: 'malacca', name: 'Malacca', polygon: [[1.0, 101.5], [3.2, 100.4], [5.9, 98.0], [6.3, 99.4], [2.8, 102.6], [1.1, 103.9]], center: [3.2, 101.2], count: 0, tankerCount: 0 },
+    { id: 'babelmandeb', name: 'Bab el-Mandeb', polygon: [[12.0, 42.5], [13.6, 42.2], [13.9, 43.7], [12.2, 44.1]], center: [12.9, 43.1], count: 0, tankerCount: 0 }
+  ];
+  function pip(lat, lon, poly) { // point in polygon (ray cast)
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var yi = poly[i][0], xi = poly[i][1], yj = poly[j][0], xj = poly[j][1];
+      if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+  function tagChokePoints(list) {
+    chokePoints.forEach(function (c) { c.count = 0; c.tankerCount = 0; });
+    list.forEach(function (v) {
+      v.chokePoint = null;
+      for (var i = 0; i < chokePoints.length; i++) {
+        if (pip(v.lat, v.lon, chokePoints[i].polygon)) {
+          v.chokePoint = chokePoints[i].name; chokePoints[i].count++;
+          if (v.typeLabel === 'Tanker' || v.typeLabel === 'LNG/Gas') chokePoints[i].tankerCount++;
+          break;
+        }
+      }
+    });
+  }
+
+  // ---- wire up ----
+  var out = document.getElementById('out');
+  function log(s) { out.textContent = s; }
+  var vessels = gen(500);
+  tagChokePoints(vessels);
+  FD.map.mount(document.getElementById('map'), {
+    onSelect: function (v) { log(v ? 'selected: ' + JSON.stringify(v, null, 0) : 'selection cleared'); }
+  });
+  FD.map.setVessels(vessels);
+  FD.map.setChokePoints(chokePoints);
+  log('mounted; ' + JSON.stringify(FD.map.stats()));
+
+  function load(n) {
+    seed = 42; var t0 = performance.now();
+    vessels = gen(n); tagChokePoints(vessels);
+    FD.map.setVessels(vessels); FD.map.setChokePoints(chokePoints);
+    log('setVessels(' + n + ') in ' + (performance.now() - t0).toFixed(1) + ' ms; ' + JSON.stringify(FD.map.stats()));
+  }
+  document.getElementById('b-refresh').onclick = function () { load(500); };
+  document.getElementById('b-5k').onclick = function () { load(5000); };
+
+  var timer = null;
+  document.getElementById('b-stream').onclick = function () {
+    if (timer) { clearInterval(timer); timer = null; log('stream off'); return; }
+    timer = setInterval(function () {
+      for (var k = 0; k < 25; k++) {
+        var v = vessels[Math.floor(Math.random() * vessels.length)];
+        var r = v.cog * Math.PI / 180, step = (v.sog || 0) * 0.004;
+        v.lat = Math.max(-80, Math.min(80, v.lat + Math.cos(r) * step));
+        v.lon = ((v.lon + Math.sin(r) * step + 540) % 360) - 180;
+        v.sog = Math.max(0, v.sog + (Math.random() - 0.5));
+        v.lastSeen = Date.now();
+        FD.map.upsertVessel(v);
+      }
+    }, 500);
+    log('stream on (25 upserts / 500 ms)');
+  };
+  function applyFilter() {
+    var t = document.getElementById('f-type').value;
+    FD.map.setFilter({ types: t ? t.split(',') : null, laden: document.getElementById('f-laden').value, minSog: +document.getElementById('f-sog').value });
+    log('filter ' + JSON.stringify(FD.map.getFilter()) + ' -> ' + JSON.stringify(FD.map.stats()));
+  }
+  document.getElementById('f-type').onchange = applyFilter;
+  document.getElementById('f-laden').onchange = applyFilter;
+  document.getElementById('f-sog').onchange = applyFilter;
+  document.getElementById('b-focus').onclick = function () { var v = vessels[Math.floor(Math.random() * vessels.length)]; FD.map.focusVessel(v.mmsi); };
+  document.getElementById('b-hormuz').onclick = function () { FD.map.flyTo('hormuz'); };
+
+  // expose for headless checks
+  window.__test = { vessels: vessels, chokePoints: chokePoints, load: load, gen: gen };
+})();
+</script>
+</body>
+</html>
